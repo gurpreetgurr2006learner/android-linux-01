@@ -1,0 +1,262 @@
+# Refined Technical Review: Command Support and Limitations in Termux on Android
+
+## Executive summary
+
+This refined report reviews and upgrades the attached document (`/mnt/data/Command Support and Limitations in Termux on Android.md`) for factual accuracy, source quality, and operational usefulness as of **March 17, 2026 (Asia/Kolkata)**. The topic remains the same: how and why **command support in Termux differs from conventional Linux distributions**, and what users should expect on modern Android devices.
+
+Three corrections materially change the reliability of the original report:
+
+First, the refined report replaces several community/tertiary citations (e.g., Reddit/Scribd/blog posts) with **primary Termux documentation, AOSP/Android official documentation, and peer‑reviewed security literature**, raising supportability for key claims about sandboxing, `/proc` behavior, and `/proc/net` restrictions. Termux is best understood as a Linux *userland* packaged for Android (not a traditional distro) and built against Android’s runtime constraints. Termux packages are compiled with the Android NDK and linked against **Bionic** (Android’s C library and dynamic linker), so foreign distro binaries/packages are often incompatible without adaptation. citeturn7view0turn0search0turn2search1turn2search21
+
+Second, the refined report updates the **Android version‑driven breaking points** that govern command behavior. Two are especially load‑bearing for “why does `ps`, `ifconfig`, `netstat`, etc. not behave like Linux?”:
+- Android’s hardening increasingly restricts `/proc` visibility for apps, and AOSP explicitly introduced mounting `/proc` with `hidepid=2` and a privileged exception group (`gid=3009`, AID_READPROC). These kernel‑level and platform changes explain why unprivileged terminal apps cannot enumerate system processes like desktop Linux tools do. citeturn10search0turn10search1turn8search14turn0search3turn8search41  
+- Android 10+ blocks app access to **`/proc/net`**, directly impacting tools that depend on those pseudo‑files for interface and connection statistics. citeturn0search6turn16search0
+
+Third, the refined report adds a major omission: **Android 12+ “phantom process” killing**, called out by Termux maintainers as a stability risk when Termux spawns many processes (typical for build systems, language tooling, SSH multiplexing, and proot workloads). Termux’s upstream README warns that Android may kill phantom processes over a threshold and also kill processes with excessive CPU usage, leading to abrupt session termination. citeturn7view0turn15search3
+
+The refined report includes a defensible supportability assessment (what is *fully supported vs. partially supported vs. effectively unsupported* without root), a verification ledger with primary citations, a risk/uncertainty register, and a practical roadmap and test plan for keeping the report accurate over time.
+
+## Scope and objectives
+
+**Scope (technical):** This review covers Termux command support on Android, emphasizing **non‑root** Termux (the default). It also covers the common escalation paths—**PRoot/PRoot‑Distro** and **rooted devices**—only insofar as they explain command support boundaries and realistic workarounds. citeturn7view0turn4view0turn5search1turn1search6
+
+**Scope (review):** The objectives are to (a) validate the attached report’s factual claims against primary sources and peer‑reviewed literature, (b) correct errors and add missing platform constraints, (c) update figures/metrics where available, and (d) provide an actionable implementation and verification plan.
+
+**Out of scope:** Step‑by‑step offensive security instructions, exploitation guidance, or “how to bypass Android security restrictions.” This report describes constraints and safe verification steps, not misuse.
+
+## Methodology and verification approach
+
+The review used a claim‑ledger approach:
+
+**Extraction:** Key factual statements from the attached report were identified and grouped into: Termux packaging/runtime model, filesystem/layout, Android sandboxing & `/proc` behavior, networking visibility, storage access constraints, service management/init systems, and proot/root escalation.
+
+**Primary verification:** Each claim was checked against:
+- Termux upstream repos and wikis (Termux app README; Termux packages wiki; Termux wiki pages on differences, storage, package management). citeturn7view0turn0search0turn11view0turn6search0turn3search2turn3search0  
+- Official Android/AOSP documentation (App Sandbox model; SELinux hardening notes; Android 10 privacy change restricting `/proc/net`; AOSP commits documenting `/proc` mount options and phantom process dev‑option toggle). citeturn2search0turn0search3turn0search6turn10search0turn15search3  
+- Upstream Linux/system documentation where the report depends on Linux semantics (e.g., what “PID 1” means for systemd). citeturn5search2turn5search20  
+
+**Peer‑reviewed triangulation:** Two peer‑reviewed sources were used to contextualize Android’s platform security hardening and process information leaks via procfs:
+- SEAndroid (NDSS 2013) for SELinux/MAC integration rationale and architecture. citeturn2search7turn2search27  
+- ProcHarvester (ASIA CCS 2018) for procfs leak analysis and the rationale behind strong `/proc` restrictions in Android N/O and later. citeturn8search41
+
+**Supportability rubric:** “Supported” is interpreted operationally:
+- **Fully supported:** Works in Termux userland on non‑root Android with standard permissions and current Termux packages.
+- **Partially supported:** Works with reduced fidelity/output or under limited Android versions/ROMs; may require alternate APIs/tools.
+- **Not supported (without elevated context):** Depends on privileged kernel operations, blocked interfaces, or init/system components (requires root, custom ROM, or different platform).
+
+## Findings, verifications, and updated data
+
+**Evidence base improvement (chart):** The original report relied on a mixed set of sources (official + community). The refined report shifts weight to primary/official and peer‑reviewed sources.
+
+```mermaid
+xychart-beta
+  title "Sources by type: original vs. refined"
+  x-axis ["Termux official", "Android/AOSP official", "Peer-reviewed", "Community/tertiary"]
+  y-axis "Approx. count" 0 --> 16
+  bar "Original" [6,2,0,10]
+  bar "Refined"  [10,9,2,1]
+```
+
+**Updated operational metrics (previously missing/unspecified):**
+- Termux’s primary package repository host is documented as `packages.termux.dev`, and the **full mirror size** was reported as **27.57 GB (June 2025)** in the Termux packages mirror documentation. citeturn6search0  
+- Termux upstream warns Android 12+ may kill phantom processes above a threshold of **32** (limit applies across apps) and kill processes with excessive CPU usage, impacting stability of process‑heavy workflows. citeturn7view0  
+- Android 10+ explicitly restricts app access to **`/proc/net`** for privacy reasons. citeturn0search6  
+
+### Comparison table of high-impact original vs. revised items
+
+The table below quotes/paraphrases key statements from the attached report (with its internal line references) and provides revised wording and the primary evidence supporting the revision.
+
+| Area | Original report statement (with line ref) | Issue | Revised statement | Primary support |
+|---|---|---|---|---|
+| Termux definition | “Termux is … a self-contained Linux distribution for Android…” (L5) | Slightly imprecise framing; better anchored in upstream description | Termux is an **Android terminal application and Linux environment** that provides a packaged userland; it is not a conventional Linux distribution and runs under Android’s app sandbox. citeturn7view0turn2search0 | Termux upstream README + Android sandbox docs. citeturn7view0turn2search0 |
+| Build/runtime model | “Compiled with the Android NDK against Bionic…” (L11) | Correct, but needed stronger primary backing and explicit Bionic definition | Termux builds packages with the **Android NDK** and links against **Bionic (Android’s libc + dynamic linker)**, which breaks binary compatibility with glibc-based distros unless rebuilt/ported. citeturn0search0turn2search21 | Termux “Differences from Linux” + AOSP bionic docs. citeturn0search0turn2search21 |
+| Repo model | “Optional repos (game-repo, science-repo…)” (L15) | Out of date: game/science channels merged into main; confusion between “repositories” vs “channels” | Termux repositories are served via `packages.termux.dev` with distinct repos (notably **main, root, x11**). The **science/game repos have been merged into main**, and users may need to remove old repo packages/configuration. citeturn6search0turn6search8 | Termux packages wiki (Mirrors + package-management). citeturn6search0turn6search8 |
+| Package manager guidance | “Users strongly encouraged to use pkg wrapper” (L15) | Correct; strengthen with current official doc | Termux **strongly recommends using `pkg` instead of `apt` directly**, because `pkg` is a wrapper that applies Termux-specific behavior and shortcuts. citeturn3search2 | Termux Package Management page. citeturn3search2 |
+| Android system binaries | “toybox or busybox under /system/bin and /system/xbin” (L19) | Needs nuance: toybox is core; `/system/xbin` is optional; PATH conflicts matter | Android’s core system utilities live under **`/system/bin`** and are primarily provided by **toybox**; `/system/xbin` may exist but is ROM-dependent. Termux documentation warns against adding `/system/bin` to PATH due to conflicts. citeturn16search0turn3search27turn3search12 | Termux filesystem layout + AOSP toybox build + toybox docs. citeturn16search0turn3search27turn3search12 |
+| `/proc` visibility | “From Android 7 onward… `ps` only lists Termux processes” (L61–L84) | Directionally correct; should cite AOSP commit and procfs semantics | Android hardening includes mounting `/proc` with `hidepid=2` and a privileged exception group, limiting process visibility for unprivileged apps; this explains why `ps` cannot enumerate all system processes in Termux. citeturn10search0turn8search14turn8search41 | AOSP commit + kernel docs + peer-reviewed procfs leak work. citeturn10search0turn8search14turn8search41 |
+| `/proc/net` access | “Starting with Android 10, access to /proc/net is restricted…” (L61–L85) | Correct; replace Reddit-based support with official Android doc | On Android 10+, apps cannot access `/proc/net`; networking tools relying on these pseudo-files may fail or return partial output. citeturn0search6turn16search0 | Android 10 privacy change doc + Termux filesystem layout. citeturn0search6turn16search0 |
+| Static binaries + seccomp | “On Android 8+ some statically linked programs are blocked entirely by seccomp filters.” (L57) | Overbroad/unsupported; Android uses seccomp filters, but “blocked entirely” is inaccurate framing | Android applies **seccomp filtering** to reduce syscall attack surface (notably installed via zygote for apps). This may break specific programs/syscalls, but should be described as **syscall/API restrictions causing compatibility failures**, not “all static binaries blocked.” citeturn2search2 | Android Developers blog on seccomp. citeturn2search2 |
+| External storage installability | “Termux cannot be installed on external storage (SD cards) on non‑rooted devices…” (L67) | Overstated; adoptable storage exists; real limitation is executability/POSIX semantics on shared/external storage + app-private directory expectations | Termux’s rootfs lives in its **private app data directory** and expects POSIX features. Shared/external storage generally lacks chmod/chown/special files/executables for apps, and external SD/USB is often read‑only except app-private directories; full read-write external storage support typically requires root. citeturn11view0turn3search0turn3search33 | Termux filesystem layout + Termux storage docs. citeturn11view0turn3search0turn3search33 |
+| Add-ons list | “Add-ons such as Termux:API, Termux:Boot, Termux:GUI…” (L23) | “Termux:GUI” is not in the upstream plugin list; missing important official plugins | Upstream lists official plugin apps: **Termux:API, Boot, Float, Styling, Tasker, Widget**. These must be installed from the same signing source as Termux due to sharedUserId/signature constraints. citeturn7view0 | Termux upstream README (plugins + signature rule). citeturn7view0 |
+| Android 12+ stability risks | Not addressed | Major omission affecting practical command support | Termux upstream warns **Android 12+ may kill “phantom” processes** above a limit (32) and processes with high CPU, causing unexpected termination for process-heavy workloads. AOSP added a developer option flag to toggle phantom process monitoring behavior. citeturn7view0turn15search3 | Termux upstream README + AOSP commit. citeturn7view0turn15search3 |
+
+### Factual verification ledger with sources
+
+Below is a concise ledger of the most important “what to believe” facts, each grounded in primary sources.
+
+| Verified topic | Verified statement | Supportability note |
+|---|---|---|
+| Android app sandbox | Android isolates apps using Linux UIDs and runs each app in its own process, enforcing a kernel-level sandbox. citeturn2search0turn2search20 | Structural constraint; cannot be “fixed” by Termux alone. |
+| Termux userland build model | Termux compiles packages with Android NDK and links against Bionic; it is not FHS‑compatible, and conventional distro binaries often fail due to linker paths/ABI differences. citeturn0search0turn2search21turn11view0 | Explains why “copy a random Linux binary to Termux” fails. |
+| `/proc` hardening | AOSP introduced mounting `/proc` with `hidepid=2` and an exception gid, limiting process visibility for ordinary apps; procfs semantics explain what `hidepid=2` means. citeturn10search0turn8search14turn8search6 | Commands that rely on enumerating all processes (classic `ps` expectations) become “partially supported.” |
+| `/proc/net` restriction | Android 10+ prevents apps from accessing `/proc/net` (network state pseudo-files), requiring apps to use proper Android APIs instead. citeturn0search6 | Tools like `netstat`/`ifconfig` may degrade or fail on modern Android. |
+| Termux repo hosting | Termux packages are served via a primary host (`packages.termux.dev`) with mirror infrastructure; mirror docs note service variability (including censorship events) and give mirror size metrics. citeturn6search0 | Availability risk; mitigated by mirror selection and `termux-change-repo`. |
+| Game/science repo changes | Termux documentation states science/game repos have been merged into main and should be removed if present. citeturn6search8 | Original report should be updated to avoid obsolete repo guidance. |
+| Termux plugin ecosystem | Upstream lists the official plugin apps and warns not to mix installation sources because of signature/sharedUserId constraints. citeturn7view0 | Operational requirement; impacts “Termux:API” command availability. |
+| PRoot boundaries | PRoot is user-space “chroot-like” functionality implemented without privileges (ptrace-based); proot-distro is a wrapper and does not provide high-grade isolation like containers. citeturn1search6turn1search22turn4view0 | Workaround for user-space compatibility only; doesn’t remove Android kernel restrictions. |
+| systemd expectations | systemd is a service manager designed to run as PID 1 (init) in a Linux boot; in typical Termux/proot contexts, “systemctl” failures are expected. citeturn5search2turn5search20 | “Not supported” in ordinary Termux. |
+| Android 12+ phantom process risk | Termux warns Android 12+ may kill phantom processes above thresholds and kill high-CPU processes, causing unexpected Termux task termination. citeturn7view0turn15search3 | Major risk for compilers, multi-process tooling, and proot workloads. |
+
+### Supportability assessment matrix
+
+This matrix is intended to be used directly by readers to set expectations.
+
+| Capability area | Non-root Termux (native) | Termux + proot-distro | Rooted device + native tools |
+|---|---|---|---|
+| Core shells & GNU/POSIX userland | **Fully supported** when installed from Termux repos. citeturn7view0 | **Fully supported** (in-distro), but overhead and gaps possible. citeturn4view0 | **Fully supported** (highest flexibility). |
+| Compilers, language runtimes | **Fully supported**, but subject to Android 12+ process killing risks for heavy builds. citeturn7view0 | **Mostly supported**; heavier process graphs increase Android 12+ risk. citeturn7view0turn4view0 | **Fully supported**; still depends on device kernel/SELinux policy. citeturn0search3 |
+| Full system process visibility (`ps` like desktop Linux) | **Partially supported** due to `/proc` restrictions and hidepid mounting. citeturn10search0turn8search14 | **Partially supported** (inherits host kernel restrictions). citeturn2search0turn10search0 | **Improved** (root can see more), but still SELinux/ROM‑dependent. citeturn0search3 |
+| Network interface stats via `/proc/net` | **Partially/not supported** on Android 10+ (blocked). citeturn0search6 | Same limitation. citeturn0search6 | Root may restore access depending on policy; varies by ROM/OEM. citeturn0search3 |
+| Init/service management (`systemctl`, `udev`) | **Not supported** (no PID 1 systemd in Termux). citeturn5search2turn7view0 | **Not supported** in typical proot setups; systemd expects init/PID1 semantics. citeturn5search2turn4view0 | Possible only with significant control and risk; device stability/security tradeoffs. citeturn0search3 |
+| Arbitrary writes + POSIX semantics on shared/external storage | **Limited**: shared/external storage lacks executability and POSIX features; termux-setup-storage configures access. citeturn3search0turn1search0 | Same limitation; container can’t change filesystem semantics. citeturn3search0turn4view0 | Root can expand access; still constrained by filesystem type and SELinux. citeturn3search0turn0search3 |
+
+## Risk and uncertainty analysis
+
+Android’s security model and OEM variability mean “command support” is not a single binary state; it’s a moving target across Android versions, ROMs, and Termux versions.
+
+**Risk register (actionable):**
+
+| Risk | Likelihood | Impact | How it manifests | Mitigations | Verification signal |
+|---|---:|---:|---|---|---|
+| Android 12+ phantom process killing terminates Termux workloads | High on Android 12+ devices running process-heavy tasks | High | Unexpected `signal 9` session/task termination; instability for compiles, proot, multi-process servers | Use fewer concurrent processes where possible; prefer single-process modes; evaluate whether the platform provides the “monitor phantom procs” developer option toggle documented by AOSP. citeturn7view0turn15search3 | Repro by running many child processes; watch Termux upstream warning. citeturn7view0 |
+| `/proc/net` denial breaks network inspection tools | High on Android 10+ | Medium | `Permission denied` reading `/proc/net/*`; degraded `netstat/ifconfig` fidelity | Use Android APIs for network state in app contexts; accept limitation in CLI tools; document that it’s an OS privacy restriction. citeturn0search6 | Any attempt to read `/proc/net` fails on Android 10+. citeturn0search6 |
+| `/proc` hidepid mounting breaks “full ps” expectations | High on modern Android | Medium | `ps` lists only own UID processes; cannot inspect other apps’ processes | Document as expected; avoid promising “full Linux admin” behavior without root | AOSP commit + procfs semantics. citeturn10search0turn8search14 |
+| Repository outages/mirror/censorship variability | Medium | Medium | `apt/pkg` failures; slow downloads; mirror unavailability | Use `termux-change-repo`; maintain mirror fallback list; operationally monitor Termux mirror notes | Termux mirror docs note variability and mirror setup. citeturn6search0 |
+| Plugin mismatch / mixing installation sources breaks add-ons | Medium | Medium | Termux:API commands missing; plugin install failures; sharedUserId/signature errors | Install Termux and all plugins from the same source and signature; document as a hard constraint | Termux upstream README caution. citeturn7view0 |
+| Documentation staleness (rapid platform changes) | High | Medium | Readers act on outdated repo names, Android behavior changes, or discontinued install sources | Add maintenance schedule and “last verified” tags; keep primary-source links | Termux doc changes (repos merged; hosts moved). citeturn6search0turn6search8 |
+
+## Recommended changes and rationale
+
+The refined report recommends edits in two categories: **content corrections** and **structure/operational guidance improvements**.
+
+**Content corrections (what should change in the original text):**
+- Replace repo guidance that implies game-repo/science-repo are separate active repos; Termux docs indicate those have been merged into the main repo and may need removal. citeturn6search8turn6search0  
+- Replace the overbroad statement that “some statically linked programs are blocked entirely by seccomp filters” with a more accurate description: Android applies seccomp filtering broadly (notably since Android O for app processes), and specific syscalls/program behaviors may fail; the failure mode is syscall restriction, not “static binaries categorically blocked.” citeturn2search2  
+- Replace the claim that Termux “cannot be installed on SD cards” with the correct framing: Termux relies on its private app data directory and on POSIX semantics that shared/external storage often cannot provide; external SD/USB is typically read-only except app-private directories, and full RW often needs root. citeturn11view0turn3search0turn3search33  
+- Correct the add-on list to match upstream plugins (API/Boot/Float/Styling/Tasker/Widget) and add the operational constraint about not mixing installation sources due to signature/sharedUserId behavior. citeturn7view0  
+- Add a prominent “modern Android constraints” section that highlights `/proc` hidepid mounting and `/proc/net` restriction as OS-level design choices. citeturn10search0turn0search6turn8search14  
+- Add an Android 12+ stability note for phantom process killing and the availability of a developer option toggle in AOSP (where present). citeturn7view0turn15search3  
+
+**Structure and operational guidance improvements (what was missing):**
+- Add a clear “How to decide if a command will work” decision flow (below).
+- Add explicit assumptions: Android version, rooted vs non-root, storage type.
+- Add a test plan (commands, expected outcomes by Android version).
+- Add a maintenance plan tied to Android major releases and Termux repo changes.
+
+**Command support decision flow (Mermaid):**
+
+```mermaid
+flowchart TD
+  A["Need to run a command in Termux"] --> B{"Is it available as a Termux package?"}
+  B -->|Yes| C["Install via pkg (preferred) and run it"]
+  B -->|No| D{"Is there an Android system binary equivalent under /system/bin?"}
+  D -->|Yes| E{"Does it require privileged operations or restricted interfaces?"}
+  E -->|No| F["Run via wrapper or direct path; avoid PATH conflicts"]
+  E -->|Yes| G{"Do you have root or a controlled environment?"}
+  G -->|No| H["Not supported: redesign workflow (Android API / remote host / different device)"]
+  G -->|Yes| I["Use native root shell/chroot carefully; validate SELinux constraints"]
+  D -->|No| J{"Can it be ported to Termux (source build)?"}
+  J -->|Yes| K["Port/build using Termux packaging expectations (NDK+Bionic, non-FHS)"]
+  J -->|No| L["Consider proot-distro for user-space packages; accept kernel-level limits"]
+```
+
+## Implementation roadmap, testing/validation, monitoring and maintenance
+
+This section treats refinement as a maintainable documentation artifact (not a one-time edit).
+
+### Implementation roadmap
+
+**Effort and cost:** The attached report contains no effort/cost assumptions; therefore **cost is unspecified**. The estimates below are effort-only (person-days) and should be re-estimated for your team context.
+
+| Milestone | Scope | Owner (role) | Estimated effort | Cost |
+|---|---|---|---:|---|
+| Evidence hardening | Replace low-quality refs with Termux + Android primary sources; add peer-reviewed anchors | Technical writer + Android SME | 1.5–3.0 days | Unspecified |
+| Platform deltas update | Add Android 7 `/proc` hidepid context, Android 10 `/proc/net`, Android 12 phantom process killer | Android SME | 1.0–2.0 days | Unspecified |
+| Operational guidance | Add decision flow, supportability matrix, storage constraints table, plugin/source warning | Technical writer | 1.0–1.5 days | Unspecified |
+| Verification runbook | Produce repeatable test suite + expected outputs by Android version category | QA/Validation | 1.0–2.0 days | Unspecified |
+| Publish + maintain | Add “last verified” date, change log, and quarterly review | Doc owner | 0.5 day initial + 0.5 day/quarter | Unspecified |
+
+### Timeline diagram (Mermaid Gantt)
+
+```mermaid
+gantt
+  title Documentation refinement and maintenance timeline
+  dateFormat  YYYY-MM-DD
+  axisFormat  %b %d
+
+  section Refinement
+  Evidence hardening              :a1, 2026-03-18, 3d
+  Platform deltas update          :a2, after a1, 2d
+  Operational guidance additions  :a3, after a2, 2d
+  Verification runbook            :a4, after a3, 2d
+
+  section Release
+  Publish refined report          :a5, after a4, 1d
+
+  section Maintenance
+  Quarterly source re-validation  :a6, 2026-06-15, 1d
+  Quarterly source re-validation  :a7, 2026-09-15, 1d
+  Quarterly source re-validation  :a8, 2026-12-15, 1d
+```
+
+### Testing and validation plan
+
+| Test area | Test | Expected result | Evidence to capture |
+|---|---|---|---|
+| Repo correctness | Confirm configured repos and mirrors | Uses current `packages.termux.dev` repos; no obsolete science/game repos | `termux-info`, `$PREFIX/etc/apt/sources.list*`; note mirror selection guidance citeturn6search0turn6search8 |
+| `/proc` visibility | Run `ps` and attempt to observe system-wide process list | Output limited vs desktop Linux expectations due to hidepid and sandboxing | Document behavior and tie to AOSP hidepid change citeturn10search0turn8search14 |
+| `/proc/net` restriction | Attempt to read commonly used net pseudo-files | On Android 10+, `/proc/net` access denied for apps | Include Android 10 privacy change citation citeturn0search6 |
+| Storage semantics | Validate behavior in Termux $HOME/$PREFIX vs shared/external storage | Internal storage supports executables/permissions; shared/external lacks executables and POSIX features | Use Termux internal/external storage table as expected behavior citeturn3search0 |
+| Plugin availability | Install Termux:API and verify `termux-*` commands exist | Works only when Termux and plugins share the same signing source | Validate using upstream plugin list + signature warning citeturn7view0 |
+| Android 12+ stability | Spawn many processes (safe workload) and observe if platform kills tasks | On some Android 12+ builds, phantom process killing may terminate tasks unless platform toggle exists/enabled | Record Termux warning reproduction outcome, include upstream warning citation citeturn7view0turn15search3 |
+
+### Monitoring and maintenance
+
+A practical maintenance program should track *platform* and *Termux ecosystem* change signals:
+
+- **Android platform changes:** review Android major-version privacy/security changes that affect procfs, storage, and process management (e.g., `/proc/net` restriction on Android 10). citeturn0search6  
+- **Termux upstream changes:** monitor `termux/termux-app` for new warnings and compatibility notes (e.g., Android 12+ phantom process instability), and `termux/termux-packages` wiki for repo/mirror updates and merged repos. citeturn7view0turn6search0turn6search8  
+- **Security model evolution:** keep at least one peer-reviewed anchor on Android sandbox/SELinux and procfs leaks in the bibliography so the report explains *why* restrictions exist, not only *what* breaks. citeturn2search7turn8search41  
+
+## Appendix: source list and change log
+
+### Primary and peer-reviewed sources used
+
+**Termux (official):**
+- Termux upstream README (definition, plugins, Android 12+ warning, install/source compatibility). citeturn7view0  
+- Termux “Differences from Linux” (NDK+Bionic linkage; incompatibility reasons). citeturn0search0  
+- Termux packages wiki: filesystem layout (Android paths, Termux paths, `/proc` and `/proc/net` notes). citeturn11view0turn16search0  
+- Termux packages wiki: mirrors + repo hosting notes and mirror size metric. citeturn6search0  
+- Termux packages wiki: package-management (science/game repos merged). citeturn6search8  
+- Termux wiki: termux-setup-storage and storage model. citeturn1search0turn3search33turn3search0  
+- Termux wiki: PRoot overview. citeturn5search1  
+- proot-distro README (capabilities, constraints, isolation warning). citeturn4view0  
+
+**Android/AOSP (official):**
+- Android Developers: Android 10 privacy changes restricting `/proc/net`. citeturn0search6  
+- AOSP: Application Sandbox (unique UID/process isolation). citeturn2search0  
+- Android Developers fundamentals: each app is a different Linux user by default. citeturn2search20  
+- AOSP: SELinux feature page (hardening, limited `/proc`). citeturn0search3  
+- AOSP bionic docs (Bionic = Android libc + dynamic linker). citeturn2search1turn2search21  
+- AOSP commit enabling `/proc` mount `hidepid=2,gid=3009` (AID_READPROC). citeturn10search0turn10search1  
+- Android kernel docs (procfs hidepid semantics). citeturn8search14turn8search6  
+- AOSP commit adding developer-option toggle for phantom process monitoring. citeturn15search3  
+- Android Developers blog: seccomp filters in Android O (syscall surface reduction). citeturn2search2  
+
+**Peer-reviewed / academic:**
+- Smalley & Craig, “Security Enhanced (SE) Android: Bringing Flexible MAC to Android” (NDSS 2013). citeturn2search7turn2search27  
+- Spreitzer et al., “ProcHarvester: Fully Automated Analysis of Procfs Side-Channel” (ASIA CCS 2018). citeturn8search41  
+
+### Change log against the attached report
+
+| Change | Type | Why it matters |
+|---|---|---|
+| Updated repo/repository guidance: game/science merged into main | Correction | Prevents readers from following obsolete setup that can cause apt/source misconfiguration. citeturn6search8 |
+| Reframed `/proc` behavior using AOSP commit + kernel semantics | Correction + strengthening | Anchors “ps is partial” in documented platform hardening rather than community anecdotes. citeturn10search0turn8search14 |
+| Replaced Reddit-based `/proc/net` justification with Android 10 official privacy change doc | Correction + strengthening | Makes the cause of `ifconfig/netstat` degradation defensible and current. citeturn0search6 |
+| Corrected “static binaries blocked entirely by seccomp” claim | Correction | Avoids an overgeneral statement; properly attributes failures to syscall filtering/compat constraints. citeturn2search2 |
+| Added Android 12+ phantom process killer risk and AOSP toggle commit | Omission fix | Critical for real-world Termux workflows; absent in original but explicitly warned by upstream. citeturn7view0turn15search3 |
+| Corrected/standardized official plugin list and added “don’t mix sources” rule | Correction | Prevents broken plugin installations and missing `termux-*` commands. citeturn7view0 |
+| Replaced “cannot install on SD card” with nuanced storage/semantics model | Correction | Matches Termux’s documented storage feature matrix; avoids misleading hard prohibition. citeturn3search0turn11view0 |
+| Added roadmap + test plan + maintenance program | Enhancement | Enables continuous supportability instead of a static one-off narrative. |
+

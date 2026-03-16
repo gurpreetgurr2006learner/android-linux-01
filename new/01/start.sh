@@ -41,6 +41,9 @@ rm -f ~/.vnc/*:1.pid
 rm -f /data/data/com.termux/files/usr/tmp/.X1-lock
 rm -f /data/data/com.termux/files/usr/tmp/.X11-unix/X1
 rm -f /data/data/com.termux/files/usr/var/run/xrdp-sesman.pid
+# Remove stale XFCE4 session cache — causes blank screen when XFCE4 tries to
+# restore a session that no longer exists
+rm -rf ~/.cache/sessions/
 sleep 1
 
 # ── 2. Start PulseAudio ─────────────────────────────────────────────────────
@@ -57,8 +60,9 @@ export PULSE_SERVER=127.0.0.1
 # ── 3. Start TigerVNC server on display :1 (xRDP backend) ──────────────────
 echo "[3/6] Starting TigerVNC server on display :1..."
 vncserver -kill :1 >/dev/null 2>&1 || true
-vncserver :1 -geometry 1280x720 -localhost no
-sleep 2
+# -depth 24: explicit 24-bit colour depth — mismatches can cause blank screen
+vncserver :1 -geometry 1280x720 -depth 24 -localhost no
+sleep 3  # give xstartup time to launch XFCE4 on :1 before xrdp connects
 
 # ── 4. Start xRDP services (listens on port 3389) ───────────────────────────
 echo "[4/6] Starting xrdp-sesman and xrdp..."
@@ -74,19 +78,23 @@ sleep 3
 export DISPLAY=:0
 
 # ── 6. Print connection info ────────────────────────────────────────────────
-WLAN_IP=$(ip addr show wlan0 2>/dev/null \
-    | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+# Detect any active non-loopback IPv4 address (works regardless of interface name)
+LAN_IP=$(ip -4 addr show scope global 2>/dev/null \
+    | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -1)
+RDP_USER=$(whoami)
 echo ""
 echo "==========================================="
 echo "  Desktop is ready!"
 echo "==========================================="
-if [ -n "$WLAN_IP" ]; then
-    echo "  RDP → $WLAN_IP:3389"
+if [ -n "$LAN_IP" ]; then
+    echo "  RDP address  →  $LAN_IP:3389"
 else
-    echo "  RDP → <phone Wi-Fi IP>:3389"
+    echo "  RDP address  →  run: ip -4 addr show scope global"
 fi
-echo "  RDP login: use the VNC password set in setup.sh"
-echo "  Local → Open the Termux:X11 app on your phone"
+echo "  Username     →  $RDP_USER"
+echo "  Password     →  your VNC password (set in setup.sh)"
+echo "-------------------------------------------"
+echo "  Local view   →  open the Termux:X11 app"
 echo "==========================================="
 echo ""
 
