@@ -117,8 +117,12 @@ if [ "$DE_CHOICE" == "4" ]; then
 fi
 
 # -------------- 5. APPS & EXTRAS --------------
-echo -e "${PURPLE}[5/7] Installing Web Browsers, Media, Python, Wine (Box64)...${NC}"
-pkg install -y firefox vlc git wget curl python hangover-wine hangover-wowbox64
+echo -e "${PURPLE}[5/7] Installing Web Browsers, Media, Python, Node.js, Wine, OpenCode...${NC}"
+pkg install -y firefox vlc git wget curl python nodejs hangover-wine hangover-wowbox64
+
+# OpenCode AI
+echo "  -> Installing OpenCode AI CLI..."
+npm install -g opencode-ai
 
 # Python Demo
 mkdir -p ~/demo_python

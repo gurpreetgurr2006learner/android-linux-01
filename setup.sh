@@ -20,13 +20,13 @@ echo "================================================="
 echo ""
 
 # ── 1. Update packages and add x11-repo ────────────────────────────────────
-echo "[1/5] Updating packages and enabling x11-repo..."
+echo "[1/6] Updating packages and enabling x11-repo..."
 pkg update -y
 pkg install x11-repo -y
 
 # ── 2. Install desktop + VNC + XRDP ────────────────────────────────────────
 # pkg install is already idempotent — skips packages that are installed.
-echo "[2/5] Installing XFCE4, TigerVNC, xrdp, PulseAudio, dbus..."
+echo "[2/6] Installing XFCE4, TigerVNC, xrdp, PulseAudio, dbus, Node.js..."
 pkg install -y \
     xfce4 \
     xfce4-goodies \
@@ -35,14 +35,15 @@ pkg install -y \
     tigervnc \
     xrdp \
     dbus \
-    pulseaudio
+    pulseaudio \
+    nodejs
 
 # ── 3. Create VNC startup script (launches XFCE4 via VNC) ──────────────────
 # Always rewritten — this is a generated config, not user-edited.
 # IMPORTANT: Uses `exec dbus-launch --exit-with-session startxfce4` (not the
 # `eval "$(dbus-launch)"` form). The eval form can silently fail on Termux,
 # leaving the VNC display :1 blank and causing a blank screen after RDP login.
-echo "[3/5] Writing ~/.vnc/xstartup..."
+echo "[3/6] Writing ~/.vnc/xstartup..."
 mkdir -p ~/.vnc
 cat > ~/.vnc/xstartup << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -64,7 +65,7 @@ chmod +x ~/.xsession
 
 # ── 4. Write xrdp.ini config (VNC backend on port 5901) ────────────────────
 # Always rewritten — ensures the correct VNC backend config is always in place.
-echo "[4/5] Writing xrdp.ini config..."
+echo "[4/6] Writing xrdp.ini config..."
 XRDP_CONF="$PREFIX/etc/xrdp/xrdp.ini"
 cat > "$XRDP_CONF" << 'EOF'
 [Globals]
@@ -109,9 +110,14 @@ ip=127.0.0.1
 port=5901
 EOF
 
-# ── 5. Set a VNC password (used when connecting via RDP) ───────────────────
+# ── 5. Install OpenCode AI CLI ─────────────────────────────────────────────
+# Installed globally via NPM. Safe to run multiple times.
+echo "[5/6] Installing OpenCode AI CLI..."
+npm install -g opencode-ai
+
+# ── 6. Set a VNC password (used when connecting via RDP) ───────────────────
 # ~/.vnc/passwd is the binary file vncpasswd writes — if it exists, skip.
-echo "[5/5] Checking VNC password..."
+echo "[6/6] Checking VNC password..."
 if [ ! -f ~/.vnc/passwd ]; then
     echo "  -> No VNC password set. Enter one now (used at the RDP login screen):"
     vncpasswd
@@ -125,7 +131,10 @@ echo "================================================="
 echo "  [setup.sh] Setup complete!"
 echo "================================================="
 echo ""
-echo "  Now run:  bash start.sh"
+echo "  Now run:  ./start.sh"
 echo "  Then connect via RDP to  <your-wifi-ip>:3389"
 echo "  Wi-Fi IP: $(ifconfig | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)"
 echo ""
+
+# Ensure start.sh and stop.sh are executable
+chmod +x start.sh stop.sh 2>/dev/null || true
