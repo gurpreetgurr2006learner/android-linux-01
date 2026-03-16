@@ -1,24 +1,35 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
-# install.sh — Feature-rich, interactive Termux Linux Setup
+# install.sh — One-time Termux prerequisite installer
 # =============================================================================
-# This script integrates with start.sh and stop.sh in the same directory.
-# It allows selecting a Desktop Environment (DE), configures VNC/xRDP,
-# installs GPU acceleration, Python demo, Windows apps support (Wine),
-# and updates start.sh/stop.sh automatically based on your choice.
+# Installs all packages and configures GPU acceleration.
+# Does NOT write service config files (xstartup, xrdp.ini, etc.) —
+# that is handled by setup.sh so configs can be re-applied without
+# re-installing everything.
 #
-# HOW TO RUN: bash install.sh
+# WORKFLOW:
+#   1. bash install.sh   (once)
+#   2. bash setup.sh     (once, or again to reset configs)
+#   3. bash start.sh     (every time you want the desktop)
+#   4. bash stop.sh      (when done)
 # =============================================================================
 
 set -euo pipefail
+export CI=true
 
-# ── Error trap: report line number on unexpected failure ───────────────────
-trap 'echo "" >&2; echo "[install.sh] ERROR: script failed at line $LINENO" >&2; exit 1' ERR
+# ── Error trap ─────────────────────────────────────────────────────────────
+trap 'echo "" >&2; echo "[install.sh] ERROR at line $LINENO — installation aborted." >&2; exit 1' ERR
 
-# ── Resolve script directory robustly (handles symlinks) ──────────────────
+# ── Resolve script directory ───────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 
-# -------------- COLORS & UI --------------
+# ── Helper: check if package is installed ──────────────────────────────────
+is_installed() {
+    pkg list-installed "$1" 2>/dev/null | grep -q "^$1/"
+}
+
+# -------------- COLORS -------------------------------------------------------
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 PURPLE='\033[0;35m'
@@ -29,20 +40,20 @@ NC='\033[0m'
 echo -e "${CYAN}"
 cat << 'EOF'
 ===================================================
-      Termux Linux Premium Setup (Interactive)
+      Termux Linux — Prerequisite Installer
+===================================================
+  After this script finishes, run: ./setup.sh
 ===================================================
 EOF
 echo -e "${NC}"
 
-# -------------- DEVICE DETECTION --------------
+# -------------- DEVICE DETECTION ---------------------------------------------
 echo -e "${PURPLE}[*] Detecting device capabilities...${NC}"
 DEVICE_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "Unknown")
-GPU_VENDOR=$(getprop ro.hardware.egl 2>/dev/null || echo "Unknown")
+GPU_VENDOR=$(getprop ro.hardware.egl    2>/dev/null || echo "Unknown")
 echo -e "  -> Brand: ${WHITE}${DEVICE_BRAND}${NC} | GPU: ${WHITE}${GPU_VENDOR}${NC}"
 
-# Note: bash does not support (?i) PCRE syntax in [[ =~ ]].
-# Use lowercase comparison for case-insensitive matching.
-GPU_VENDOR_LOWER=$(echo "$GPU_VENDOR" | tr '[:upper:]' '[:lower:]')
+GPU_VENDOR_LOWER=$(echo "$GPU_VENDOR"    | tr '[:upper:]' '[:lower:]')
 DEVICE_BRAND_LOWER=$(echo "$DEVICE_BRAND" | tr '[:upper:]' '[:lower:]')
 
 if [[ "$GPU_VENDOR_LOWER" == *"adreno"* ]] \
@@ -50,69 +61,79 @@ if [[ "$GPU_VENDOR_LOWER" == *"adreno"* ]] \
     || [[ "$DEVICE_BRAND_LOWER" == "oneplus" ]] \
     || [[ "$DEVICE_BRAND_LOWER" == "xiaomi" ]]; then
     GPU_DRIVER="freedreno"
-    echo -e "  -> Hardware Acceleration: ${GREEN}Supported (Adreno/Turnip)${NC}"
+    echo -e "  -> Acceleration: ${GREEN}Supported (Adreno/Turnip)${NC}"
 else
     GPU_DRIVER="zink_native"
-    echo -e "  -> Hardware Acceleration: ${YELLOW}Zink Native (Software fallback possible)${NC}"
+    echo -e "  -> Acceleration: ${YELLOW}Zink Native (software fallback)${NC}"
 fi
 echo ""
 
-# -------------- DE SELECTION --------------
-echo -e "${CYAN}Please choose your Desktop Environment:${NC}"
-echo -e "  ${WHITE}1) XFCE4${NC}       (Recommended - Fast, integrates perfectly with RDP)"
+# -------------- DE SELECTION -------------------------------------------------
+echo -e "${CYAN}Choose your Desktop Environment:${NC}"
+echo -e "  ${WHITE}1) XFCE4${NC}       (Recommended — fast, RDP-optimised)"
 echo -e "  ${WHITE}2) LXQt${NC}        (Ultra lightweight)"
 echo -e "  ${WHITE}3) MATE${NC}        (Classic UI)"
-echo -e "  ${WHITE}4) KDE Plasma${NC}  (Heavy, requires strong GPU/RAM)"
+echo -e "  ${WHITE}4) KDE Plasma${NC}  (Heavy — requires strong GPU/RAM)"
 echo ""
 while true; do
     read -r -p "Enter number (1-4) [default: 1]: " DE_INPUT
     DE_INPUT="${DE_INPUT:-1}"
-    if [[ "$DE_INPUT" =~ ^[1-4]$ ]]; then
-        break
-    else
-        echo "Invalid input. Enter 1, 2, 3, or 4."
-    fi
+    if [[ "$DE_INPUT" =~ ^[1-4]$ ]]; then break; fi
+    echo "Invalid input. Enter 1, 2, 3, or 4."
 done
 
-DE_CHOICE="$DE_INPUT"
-case "$DE_CHOICE" in
-    1) DE_NAME="XFCE4";      START_CMD="startxfce4";       SESSION_PROC="xfce4-session"; PANEL_PROC="plank"       ;;
-    2) DE_NAME="LXQt";       START_CMD="startlxqt";        SESSION_PROC="lxqt-session";  PANEL_PROC=""            ;;
-    3) DE_NAME="MATE";       START_CMD="mate-session";     SESSION_PROC="mate-session";  PANEL_PROC="plank"       ;;
-    4) DE_NAME="KDE Plasma"; START_CMD="startplasma-x11";  SESSION_PROC="startplasma-x11"; PANEL_PROC="kwin_x11"  ;;
+case "$DE_INPUT" in
+    1) DE_NAME="XFCE4";      START_CMD="startxfce4";      SESSION_PROC="xfce4-session";   PANEL_PROC="plank"     ;;
+    2) DE_NAME="LXQt";       START_CMD="startlxqt";       SESSION_PROC="lxqt-session";    PANEL_PROC=""          ;;
+    3) DE_NAME="MATE";       START_CMD="mate-session";    SESSION_PROC="mate-session";    PANEL_PROC="plank"     ;;
+    4) DE_NAME="KDE Plasma"; START_CMD="startplasma-x11"; SESSION_PROC="startplasma-x11"; PANEL_PROC="kwin_x11"  ;;
 esac
+
+# Save selection so setup.sh and start.sh can read it without re-asking
+mkdir -p ~/.config
+cat > ~/.config/termux-linux.conf << EOF
+DE_NAME="${DE_NAME}"
+START_CMD="${START_CMD}"
+SESSION_PROC="${SESSION_PROC}"
+PANEL_PROC="${PANEL_PROC}"
+EOF
 
 echo -e "\n${GREEN}[+] Selected: ${DE_NAME}${NC}\n"
 
-# -------------- 1. UPDATE & REPOS --------------
-echo -e "${PURPLE}[1/7] Updating Termux and adding repositories...${NC}"
+# -------------- 1. REPOS & UPDATE --------------------------------------------
+echo -e "${PURPLE}[1/6] Adding Termux repositories...${NC}"
 pkg update -y
-pkg install x11-repo tur-repo -y
+pkg install -y x11-repo tur-repo
+pkg update -y   # refresh after new repos
 
-# -------------- 2. CORE PACKAGES --------------
-echo -e "${PURPLE}[2/7] Installing Display, Audio, and RDP Core...${NC}"
-pkg install -y termux-x11-nightly xorg-xrandr pulseaudio tigervnc xrdp dbus
+# -------------- 2. CORE PACKAGES ---------------------------------------------
+echo -e "${PURPLE}[2/6] Installing core display, audio, and RDP packages...${NC}"
+pkg install -y \
+    termux-x11-nightly \
+    xorg-xrandr \
+    pulseaudio \
+    tigervnc \
+    xrdp \
+    dbus \
+    nodejs \
+    git \
+    wget \
+    curl
 
-# -------------- 3. DESKTOP ENVIRONMENT --------------
-echo -e "${PURPLE}[3/7] Installing ${DE_NAME} Desktop...${NC}"
-if [ "$DE_CHOICE" == "1" ]; then
-    pkg install -y xfce4 xfce4-goodies xfce4-terminal xfce4-whiskermenu-plugin plank thunar mousepad
-elif [ "$DE_CHOICE" == "2" ]; then
-    pkg install -y lxqt qterminal pcmanfm-qt featherpad
-elif [ "$DE_CHOICE" == "3" ]; then
-    pkg install -y mate mate-tweak plank mate-terminal
-elif [ "$DE_CHOICE" == "4" ]; then
-    pkg install -y plasma-desktop konsole dolphin
-fi
+# -------------- 3. DESKTOP ENVIRONMENT --------------------------------------
+echo -e "${PURPLE}[3/6] Installing ${DE_NAME} desktop...${NC}"
+case "$DE_INPUT" in
+    1) pkg install -y xfce4 xfce4-goodies xfce4-terminal xfce4-whiskermenu-plugin plank thunar mousepad ;;
+    2) pkg install -y lxqt qterminal pcmanfm-qt featherpad ;;
+    3) pkg install -y mate mate-tweak plank mate-terminal ;;
+    4) pkg install -y plasma-desktop konsole dolphin ;;
+esac
 
-# -------------- 4. GPU & ACCELERATION --------------
-echo -e "${PURPLE}[4/7] Configuring Hardware Acceleration...${NC}"
+# -------------- 4. GPU ACCELERATION ------------------------------------------
+echo -e "${PURPLE}[4/6] Installing GPU acceleration packages...${NC}"
 pkg install -y mesa-zink vulkan-loader-android
-if [ "$GPU_DRIVER" == "freedreno" ]; then
-    pkg install -y mesa-vulkan-icd-freedreno
-fi
+[ "$GPU_DRIVER" == "freedreno" ] && pkg install -y mesa-vulkan-icd-freedreno
 
-mkdir -p ~/.config
 cat > ~/.config/linux-gpu.sh << 'EOF'
 export MESA_NO_ERROR=1
 export MESA_GL_VERSION_OVERRIDE=4.6
@@ -122,27 +143,18 @@ export MESA_LOADER_DRIVER_OVERRIDE=zink
 export TU_DEBUG=noconform
 export MESA_VK_WSI_PRESENT_MODE=immediate
 export ZINK_DESCRIPTORS=lazy
-export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:${XDG_DATA_DIRS:-}
-export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:${XDG_CONFIG_DIRS:-}
+export XDG_DATA_DIRS="${PREFIX}/share:${XDG_DATA_DIRS:-}"
+export XDG_CONFIG_DIRS="${PREFIX}/etc/xdg:${XDG_CONFIG_DIRS:-}"
 EOF
+[ "$DE_INPUT" == "4" ] && echo "export KWIN_COMPOSE=O2ES" >> ~/.config/linux-gpu.sh
 
-if [ "$DE_CHOICE" == "4" ]; then
-    echo "export KWIN_COMPOSE=O2ES" >> ~/.config/linux-gpu.sh
-fi
+# -------------- 5. EXTRA APPS ------------------------------------------------
+echo -e "${PURPLE}[5/6] Installing extra apps (browser, media, Python, Wine)...${NC}"
+pkg install -y firefox vlc python hangover-wine hangover-wowbox64
 
-# -------------- 5. APPS & EXTRAS --------------
-echo -e "${PURPLE}[5/7] Installing Web Browsers, Media, Python, Node.js, Wine, OpenCode...${NC}"
-pkg install -y firefox vlc git wget curl python nodejs hangover-wine hangover-wowbox64
-
-# OpenCode AI (allow failure — not critical)
-echo "  -> Installing OpenCode AI CLI..."
-if ! npm install -g opencode-ai; then
-    echo "  [WARN] opencode-ai npm install failed — continuing without it." >&2
-fi
-
-# Python Demo
+# Python demo app
 mkdir -p ~/demo_python
-(pip install flask >/dev/null 2>&1 || true)
+pip install flask >/dev/null 2>&1 || true
 cat > ~/demo_python/app.py << 'EOF'
 from flask import Flask, render_template_string
 app = Flask(__name__)
@@ -160,13 +172,13 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 EOF
 
-# Wine Fixes — use -sf to idempotently update symlinks
-WINE_BIN_DIR="/data/data/com.termux/files/usr/opt/hangover-wine/bin"
-TERMUX_BIN_DIR="/data/data/com.termux/files/usr/bin"
-ln -sf "${WINE_BIN_DIR}/wine"    "${TERMUX_BIN_DIR}/wine"    || true
-ln -sf "${WINE_BIN_DIR}/winecfg" "${TERMUX_BIN_DIR}/winecfg" || true
+# Wine convenience symlinks
+WINE_OPT="${PREFIX}/opt/hangover-wine/bin"
+TERMUX_BIN="${PREFIX}/bin"
+ln -sf "${WINE_OPT}/wine"    "${TERMUX_BIN}/wine"    || true
+ln -sf "${WINE_OPT}/winecfg" "${TERMUX_BIN}/winecfg" || true
 
-# Desktop Shortcuts
+# Desktop shortcuts
 mkdir -p ~/Desktop
 cat > ~/Desktop/Firefox.desktop << 'EOF'
 [Desktop Entry]
@@ -184,83 +196,9 @@ Type=Application
 EOF
 chmod +x ~/Desktop/Firefox.desktop ~/Desktop/VLC.desktop 2>/dev/null || true
 
-# -------------- 6. RDP & VNC CONFIG --------------
-echo -e "${PURPLE}[6/7] Configuring VNC and xRDP for ${DE_NAME}...${NC}"
-mkdir -p ~/.vnc
-# Expand $START_CMD at write time (no single-quote EOF)
-cat > ~/.vnc/xstartup << EOF
-#!/data/data/com.termux/files/usr/bin/bash
-unset SESSION_MANAGER
-unset DBUS_SESSION_BUS_ADDRESS
-export XDG_RUNTIME_DIR="/data/data/com.termux/files/usr/tmp"
-export XKL_XMODMAP_DISABLE=1
-xrdb "\$HOME/.Xresources" 2>/dev/null || true
-exec dbus-launch --exit-with-session ${START_CMD}
-EOF
-chmod +x ~/.vnc/xstartup
+# -------------- 6. PATCH start.sh / stop.sh ---------------------------------
+echo -e "${PURPLE}[6/6] Patching start.sh and stop.sh for ${DE_NAME}...${NC}"
 
-cat > ~/.xsession << 'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
-exit 0
-EOF
-chmod +x ~/.xsession
-
-XRDP_CONF="${PREFIX}/etc/xrdp/xrdp.ini"
-mkdir -p "$(dirname "$XRDP_CONF")"
-cat > "$XRDP_CONF" << 'EOF'
-[Globals]
-ini_version=1
-fork=true
-port=3389
-tcp_nodelay=true
-tcp_keepalive=true
-security_layer=negotiate
-crypt_level=high
-certificate=
-key_file=
-ssl_protocols=TLSv1.2, TLSv1.3
-autorun=
-allow_channels=true
-allow_multimon=true
-bitmap_cache=true
-bitmap_compression=true
-bulk_compression=true
-max_bpp=32
-new_cursors=true
-use_fastpath=both
-
-[Logging]
-LogFile=xrdp.log
-LogLevel=WARNING
-EnableSyslog=false
-
-[Channels]
-rdpdr=true
-rdpsnd=true
-drdynvc=true
-cliprdr=true
-rail=true
-
-[Xvnc]
-name=Xvnc
-lib=libvnc.so
-username=ask
-password=ask
-ip=127.0.0.1
-port=5901
-EOF
-
-if [ ! -f ~/.vnc/passwd ]; then
-    echo "  -> No VNC password set. Enter one now (used at the RDP login screen):"
-    vncpasswd
-else
-    echo "  -> VNC password already set (~/.vnc/passwd exists), skipping"
-fi
-
-# -------------- 7. PATCH START/STOP SCRIPTS --------------
-echo -e "${PURPLE}[7/7] Updating local start.sh and stop.sh for ${DE_NAME}...${NC}"
-
-# All known DE launch commands and session processes
 ALL_START_CMDS=("startxfce4" "startlxqt" "mate-session" "startplasma-x11")
 ALL_SESSION_PROCS=("xfce4-session" "lxqt-session" "mate-session" "startplasma-x11")
 ALL_PANEL_PROCS=("plank" "kwin_x11")
@@ -268,41 +206,29 @@ ALL_PANEL_PROCS=("plank" "kwin_x11")
 patch_script() {
     local target="$1"
     [ -f "$target" ] || return 0
-
-    # Replace all known exec lines → new DE
     for cmd in "${ALL_START_CMDS[@]}"; do
         sed -i "s|exec ${cmd}|exec ${START_CMD}|g" "$target"
     done
-
-    # Replace all known session kills → new session proc
     for proc in "${ALL_SESSION_PROCS[@]}"; do
-        sed -i "s|pkill -TERM ${proc}|pkill -TERM ${SESSION_PROC}|g" "$target"
-        sed -i "s|pkill -KILL ${proc}|pkill -KILL ${SESSION_PROC}|g" "$target"
-        # Legacy -9 form (in case the script wasn't yet hardened)
-        sed -i "s|pkill -9 ${proc}|pkill -TERM ${SESSION_PROC}|g" "$target"
+        sed -i "s|graceful_kill ${proc}|graceful_kill ${SESSION_PROC}|g" "$target"
     done
-
-    # Replace panel process if set
-    if [ -n "${PANEL_PROC:-}" ]; then
+    if [ -n "${PANEL_PROC}" ]; then
         for proc in "${ALL_PANEL_PROCS[@]}"; do
-            sed -i "s|pkill -TERM ${proc}|pkill -TERM ${PANEL_PROC}|g" "$target"
-            sed -i "s|pkill -KILL ${proc}|pkill -KILL ${PANEL_PROC}|g" "$target"
-            sed -i "s|pkill -9 ${proc}|pkill -TERM ${PANEL_PROC}|g" "$target"
+            sed -i "s|graceful_kill ${proc}|graceful_kill ${PANEL_PROC}|g" "$target"
         done
     fi
-
-    echo "  -> Patched: $target"
+    chmod +x "$target"
+    echo "  -> Patched: $(basename "$target")"
 }
 
 patch_script "${SCRIPT_DIR}/start.sh"
 patch_script "${SCRIPT_DIR}/stop.sh"
 
+# -------------- DONE ---------------------------------------------------------
 echo ""
 echo -e "${GREEN}================================================${NC}"
-echo -e "${GREEN}  [*] INSTALLATION COMPLETE! [${DE_NAME}]       ${NC}"
+echo -e "${GREEN}  [install.sh] Packages installed! [${DE_NAME}]${NC}"
 echo -e "${GREEN}================================================${NC}"
-echo -e "  - GPU Acceleration Configured"
-echo -e "  - Apps Installed: Firefox, VLC, Python Demo, Wine"
-echo -e "  - Local Scripts Updated: start.sh / stop.sh"
-echo -e "\nTo start your desktop, run:  ${WHITE}bash start.sh${NC}"
+echo ""
+echo -e "  Next step → run: ${WHITE}bash setup.sh${NC}"
 echo ""

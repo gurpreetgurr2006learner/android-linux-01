@@ -1,38 +1,48 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
-# start.sh — Run in Termux to start XFCE4 desktop + RDP server
+# start.sh — Start XFCE4 desktop + RDP server
 # =============================================================================
 # What this does:
-#   1. Kills any leftover sessions from a previous run
+#   1. Cleans up any stale sessions/locks from previous run
 #   2. Starts PulseAudio (audio)
-#   3. Starts TigerVNC server on display :1 (used by xRDP as its backend)
-#   4. Starts xrdp-sesman and xrdp (RDP listener on port 3389)
-#   5. Starts Termux:X11 display server on :0 (for local viewing on phone)
-#   6. Launches XFCE4 on the local X11 display
-#
-# After this you can:
-#   • RDP in from any device on the same Wi-Fi → <phone-ip>:3389
-#   • View locally on phone → open the Termux:X11 app
+#   3. Starts TigerVNC server on :1 (xRDP backend)
+#   4. Starts xrdp-sesman + xrdp (RDP on port 3389)
+#   5. Starts Termux:X11 on :0 (local phone display)
+#   6. Prints connection info (IP, hostname, username)
+#   7. Launches the chosen desktop environment (blocking)
 # =============================================================================
 
-set -euo pipefail
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+set -eo pipefail   # NOTE: -u is intentionally NOT set globally;
+                   # linux-gpu.sh may reference unset vars (XDG_DATA_DIRS etc.)
+                   # and set -u would silently kill the script before || true fires.
 
-# ── Error trap: report line number on unexpected failure ───────────────────
-trap 'echo "" >&2; echo "[start.sh] ERROR: script failed at line $LINENO" >&2; exit 1' ERR
+trap 'echo ""; echo "[start.sh] !! ERROR at line $LINENO — check output above."; exit 1' ERR
 
-# ── Helper: graceful kill (SIGTERM → wait → SIGKILL) ──────────────────────
+# ── Load DE selection ─────────────────────────────────────────────────────
+# Default values first — guaranteed to be set even if conf is missing
+DE_NAME="XFCE4"
+START_CMD="startxfce4"
+SESSION_PROC="xfce4-session"
+PANEL_PROC="plank"
+
+CONF="${HOME}/.config/termux-linux.conf"
+if [ -f "$CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$CONF"
+fi
+
+# ── Helper: graceful kill — SIGTERM → wait → SIGKILL ─────────────────────
 graceful_kill() {
     local pattern="$1"
-    local timeout="${2:-3}"
-    local use_f="${3:-}"
+    local timeout="${2:-4}"
+    local extra="${3:-}"   # pass "-f" to match full command line
 
-    # shellcheck disable=SC2086
-    pkill ${use_f} -TERM "$pattern" 2>/dev/null || true
+    pkill $extra -TERM "$pattern" 2>/dev/null || true
     local waited=0
-    while pkill -0 "$pattern" 2>/dev/null; do
+    while pkill $extra -0 "$pattern" 2>/dev/null; do
         if [ "$waited" -ge "$timeout" ]; then
-            # shellcheck disable=SC2086
-            pkill ${use_f} -KILL "$pattern" 2>/dev/null || true
+            pkill $extra -KILL "$pattern" 2>/dev/null || true
             break
         fi
         sleep 1
@@ -40,14 +50,14 @@ graceful_kill() {
     done
 }
 
-# ── Helper: wait for a process matching a pattern to appear ───────────────
+# ── Helper: poll until a process appears ─────────────────────────────────
 wait_for_process() {
     local pattern="$1"
-    local timeout="${2:-10}"
+    local timeout="${2:-15}"
     local waited=0
     while ! pgrep -f "$pattern" >/dev/null 2>&1; do
         if [ "$waited" -ge "$timeout" ]; then
-            echo "  [WARN] Timed out waiting for '$pattern' to start" >&2
+            echo "  [WARN] '$pattern' did not start within ${timeout}s" >&2
             return 1
         fi
         sleep 1
@@ -58,35 +68,41 @@ wait_for_process() {
 
 echo ""
 echo "==========================================="
-echo "  [start.sh] Starting desktop + RDP..."
+echo "  [start.sh] Starting ${DE_NAME} + RDP..."
 echo "==========================================="
 echo ""
 
-# ── 0. Optional hardware acceleration config ────────────────────────────────
+# ── 0. Optional GPU/hardware acceleration ─────────────────────────────────
+# IMPORTANT: source must NOT run under set -u — linux-gpu.sh may reference
+# XDG_DATA_DIRS etc. before they are exported, which would make set -u kill
+# the entire shell even though we have || true (|| true only catches exit codes,
+# not set -u termination which happens before the command returns).
+echo "[0/6] Loading GPU acceleration config..."
+set +u
 # shellcheck disable=SC1090
 source ~/.config/linux-gpu.sh 2>/dev/null || true
+set -u
+echo "        done."
 
-# ── 1. Kill any leftover processes ─────────────────────────────────────────
+# ── 1. Clean up stale sessions ────────────────────────────────────────────
 echo "[1/6] Cleaning up old sessions..."
-graceful_kill "termux.x11" 3 "-f"
+graceful_kill "termux.x11" 4 "-f"
 graceful_kill xfce4-session
 graceful_kill plank
-graceful_kill dbus 3 "-f"
+graceful_kill dbus 4 "-f"
 graceful_kill xrdp
 graceful_kill sesman
 graceful_kill Xvnc
 
-# Clean up stale lock files
 rm -f ~/.vnc/*:1.pid
-rm -f /data/data/com.termux/files/usr/tmp/.X1-lock
-rm -f /data/data/com.termux/files/usr/tmp/.X11-unix/X1
-rm -f /data/data/com.termux/files/usr/var/run/xrdp-sesman.pid
-# Remove stale XFCE4 session cache — causes blank screen when XFCE4 tries to
-# restore a session that no longer exists
+rm -f "${PREFIX}/tmp/.X1-lock"
+rm -f "${PREFIX}/tmp/.X11-unix/X1"
+rm -f "${PREFIX}/var/run/xrdp-sesman.pid"
+# Clear stale XFCE4 session cache — prevents blank screen on reconnect
 rm -rf ~/.cache/sessions/
 sleep 1
 
-# ── 2. Start PulseAudio ─────────────────────────────────────────────────────
+# ── 2. PulseAudio ─────────────────────────────────────────────────────────
 echo "[2/6] Starting PulseAudio..."
 unset PULSE_SERVER
 pulseaudio --kill 2>/dev/null || true
@@ -97,61 +113,60 @@ pactl load-module module-native-protocol-tcp \
     auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null || true
 export PULSE_SERVER=127.0.0.1
 
-# ── 3. Start TigerVNC server on display :1 (xRDP backend) ──────────────────
-echo "[3/6] Starting TigerVNC server on display :1..."
+# ── 3. TigerVNC on :1 (xRDP backend) ─────────────────────────────────────
+echo "[3/6] Starting TigerVNC on display :1..."
 vncserver -kill :1 >/dev/null 2>&1 || true
-# -depth 24: explicit 24-bit colour depth — mismatches can cause blank screen
 vncserver :1 -geometry 1280x720 -depth 24 -localhost no
 
-# Wait for VNC to actually be ready before xrdp tries to connect
-wait_for_process "Xvnc :1" 15 \
-    || { echo "[start.sh] ERROR: TigerVNC did not start in time." >&2; exit 1; }
-sleep 1  # short additional settle time for xstartup
+# Wait for Xvnc to be ready before xrdp tries to connect
+wait_for_process "Xvnc :1" 20 \
+    || { echo "[start.sh] ERROR: TigerVNC did not start." >&2; exit 1; }
+sleep 1
 
-# ── 4. Start xRDP services (listens on port 3389) ───────────────────────────
+# ── 4. xRDP services ──────────────────────────────────────────────────────
 echo "[4/6] Starting xrdp-sesman and xrdp..."
 xrdp-sesman
-wait_for_process "xrdp-sesman" 10 \
-    || echo "  [WARN] xrdp-sesman may not have started" >&2
+wait_for_process "xrdp-sesman" 10 || echo "  [WARN] xrdp-sesman may not have started" >&2
 xrdp
-wait_for_process "xrdp" 10 \
-    || echo "  [WARN] xrdp may not have started" >&2
+wait_for_process "xrdp" 10 || echo "  [WARN] xrdp may not have started" >&2
 
-# ── 5. Start Termux:X11 display server on :0 (for local phone view) ─────────
+# ── 5. Termux:X11 on :0 (local display) ──────────────────────────────────
 echo "[5/6] Starting Termux:X11 on display :0..."
 termux-x11 :0 -ac &
-# Give Termux:X11 time to open the socket before we try to connect
-wait_for_process "termux.x11" 10 \
-    || echo "  [WARN] Termux:X11 may not have started" >&2
+wait_for_process "termux.x11" 10 || echo "  [WARN] Termux:X11 may not have started" >&2
 sleep 1
 export DISPLAY=:0
 
-# ── 6. Print connection info ────────────────────────────────────────────────
-# Detect any active non-loopback IPv4 address (prefer `ip` over deprecated `ifconfig`)
+# ── 6. Print connection info ──────────────────────────────────────────────
+# Detect IP
 if command -v ip >/dev/null 2>&1; then
     LAN_IP=$(ip -4 addr show scope global 2>/dev/null \
-        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
+        | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1 || true)
 else
     LAN_IP=$(ifconfig 2>/dev/null \
-        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
+        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1 || true)
 fi
+
+# Hostname (set by setup.sh into $PREFIX/etc/hostname)
+HOSTNAME_FILE="${PREFIX}/etc/hostname"
+TERMUX_HOST=$(cat "$HOSTNAME_FILE" 2>/dev/null || hostname 2>/dev/null || echo "android-linux")
 RDP_USER=$(whoami)
+
 echo ""
 echo "==========================================="
-echo "  Desktop is ready!"
+echo "  Desktop is ready! (${DE_NAME})"
 echo "==========================================="
-if [ -n "${LAN_IP:-}" ]; then
-    echo "  RDP address  →  $LAN_IP:3389"
-else
-    echo "  RDP address  →  run: ip -4 addr show scope global"
-fi
-echo "  Username     →  $RDP_USER"
-echo "  Password     →  your VNC password (set in setup.sh)"
+echo "  Wi-Fi IP   : ${LAN_IP:-(run: ip -4 addr show scope global)}"
+echo "  Hostname   : ${TERMUX_HOST}"
+echo "  Username   : ${RDP_USER}"
 echo "-------------------------------------------"
-echo "  Local view   →  open the Termux:X11 app"
+echo "  RDP Address: ${LAN_IP:-<phone-ip>}:3389"
+echo "  Password   : your VNC password (set in setup.sh)"
+echo "-------------------------------------------"
+echo "  Local view : open the Termux:X11 app"
 echo "==========================================="
 echo ""
 
-# ── 7. Launch XFCE4 on local X11 display (blocking) ─────────────────────────
-echo "[6/6] Launching XFCE4 on local display..."
+# ── 7. Launch desktop (blocking — keeps the terminal session alive) ───────
+echo "[6/6] Launching ${DE_NAME} on local display..."
 exec startxfce4

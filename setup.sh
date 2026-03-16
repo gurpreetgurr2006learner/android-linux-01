@@ -1,78 +1,81 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
-# setup.sh — Idempotent Termux RDP setup (safe to run multiple times)
+# setup.sh — Idempotent config writer (safe to run multiple times)
 # =============================================================================
-# Installs xfce4, xrdp, tigervnc and writes config files.
-# Config files (xstartup, xsession, xrdp.ini) are always rewritten so fixes
-# are always applied on re-run. Only vncpasswd is skipped if already set.
+# Reads the DE choice saved by install.sh, then:
+#   • Updates pkg and apt packages
+#   • Writes all service config files (xstartup, xrdp.ini, etc.)
+#   • Installs CLI tools via npm (opencode-ai, openclaw)
+#   • Sets the Termux hostname
+#   • Prompts for VNC password (if not already set)
+#   • Displays connection info: IP, hostname, username
 #
-# HOW TO RUN:
-#   bash setup.sh
-#   (Run in Termux — NOT inside another shell or environment)
+# HOW TO RUN: bash setup.sh  (run after install.sh, or alone for XFCE4)
 # =============================================================================
 
-set -euo pipefail
+set -eo pipefail   # NOTE: -u intentionally omitted — sourced conf files may
+                   # reference unset vars; set -u would kill shell before || true.
 
-# ── Resolve the directory where this script lives ──────────────────────────
+trap 'echo "" >&2; echo "[setup.sh] ERROR at line $LINENO — setup aborted." >&2; exit 1' ERR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# ── Error trap: report line number on unexpected failure ───────────────────
-trap 'echo "" >&2; echo "[setup.sh] ERROR: script failed at line $LINENO" >&2; exit 1' ERR
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 
 echo ""
 echo "================================================="
-echo "  [setup.sh] Termux RDP setup (idempotent)"
+echo "  [setup.sh] Configuring Termux RDP environment"
 echo "================================================="
 echo ""
 
-# ── 1. Update packages and add x11-repo ────────────────────────────────────
-echo "[1/7] Updating packages and enabling x11-repo..."
+# Default values — will be overridden if conf exists
+DE_NAME="XFCE4"
+START_CMD="startxfce4"
+SESSION_PROC="xfce4-session"
+PANEL_PROC="plank"
+
+CONF="${HOME}/.config/termux-linux.conf"
+if [ -f "$CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$CONF"
+fi
+echo "  DE: ${DE_NAME} / launch: ${START_CMD}"
+echo ""
+
+# ── 1. Update Termux packages (pkg wraps apt; both are run for completeness) ─
+echo "[1/8] Updating Termux packages (pkg)..."
 pkg update -y
-pkg install x11-repo -y
+pkg upgrade -y
 
-# ── 2. Install desktop + VNC + XRDP ────────────────────────────────────────
-# pkg install is already idempotent — skips packages that are installed.
-echo "[2/7] Installing XFCE4, TigerVNC, xrdp, PulseAudio, dbus, Node.js, Git..."
-pkg install -y \
-    xfce4 \
-    xfce4-goodies \
-    xfce4-terminal \
-    xfce4-whiskermenu-plugin \
-    tigervnc \
-    xrdp \
-    dbus \
-    pulseaudio \
-    nodejs \
-    git
+# apt is also available directly in Termux and may be needed by proot containers
+echo "[1/8] Updating apt packages..."
+apt update -y  2>/dev/null || true
+apt upgrade -y 2>/dev/null || true
 
-# ── 3. Create VNC startup script (launches XFCE4 via VNC) ──────────────────
-# Always rewritten — this is a generated config, not user-edited.
-# IMPORTANT: Uses `exec dbus-launch --exit-with-session startxfce4` (not the
-# `eval "$(dbus-launch)"` form). The eval form can silently fail on Termux,
-# leaving the VNC display :1 blank and causing a blank screen after RDP login.
-echo "[3/7] Writing ~/.vnc/xstartup..."
+# ── 2. Write VNC startup script ───────────────────────────────────────────
+# Uses chosen DE's start command; always rewritten so re-running fixes issues.
+echo "[2/8] Writing ~/.vnc/xstartup (${START_CMD})..."
 mkdir -p ~/.vnc
-cat > ~/.vnc/xstartup << 'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
+# Note: *unquoted* EOF so ${START_CMD} is expanded into the file
+cat > ~/.vnc/xstartup << EOF
+#!/usr/bin/env bash
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
-export XDG_RUNTIME_DIR="/data/data/com.termux/files/usr/tmp"
+export XDG_RUNTIME_DIR="\${PREFIX}/tmp"
 export XKL_XMODMAP_DISABLE=1
-xrdb "$HOME/.Xresources" 2>/dev/null || true
-exec dbus-launch --exit-with-session startxfce4
+xrdb "\$HOME/.Xresources" 2>/dev/null || true
+exec dbus-launch --exit-with-session ${START_CMD}
 EOF
 chmod +x ~/.vnc/xstartup
 
-# Neutralize .xsession so XFCE doesn't launch twice on the VNC display
+# Neutralize .xsession so the DE doesn't launch twice on the VNC display
 cat > ~/.xsession << 'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
+#!/usr/bin/env sh
 exit 0
 EOF
 chmod +x ~/.xsession
 
-# ── 4. Write xrdp.ini config (VNC backend on port 5901) ────────────────────
-# Always rewritten — ensures the correct VNC backend config is always in place.
-echo "[4/7] Writing xrdp.ini config..."
+# ── 3. Write xrdp.ini —  VNC backend on port 5901 ───────────────────────
+echo "[3/8] Writing xrdp.ini..."
 XRDP_CONF="${PREFIX}/etc/xrdp/xrdp.ini"
 mkdir -p "$(dirname "$XRDP_CONF")"
 cat > "$XRDP_CONF" << 'EOF'
@@ -118,19 +121,21 @@ ip=127.0.0.1
 port=5901
 EOF
 
-# ── 5. Install OpenCode AI CLI ─────────────────────────────────────────────
-# Installed globally via NPM. Safe to run multiple times.
-echo "[5/7] Installing OpenCode AI CLI..."
-if ! npm install -g opencode-ai; then
-    echo "  [WARN] opencode-ai npm install failed — continuing without it." >&2
+# ── 4. Install OpenCode AI CLI and OpenClaw (npm, idempotent) ───────────
+echo "[4/8] Installing OpenCode AI CLI..."
+# CI=true: prevents node postinstall scripts from running interactive REPLs.
+# Do NOT use 2>/dev/null here — it hides npm output but still lets interactive
+# postinstall scripts inherit the terminal (which opens a Node.js REPL).
+if ! CI=true npm install -g opencode-ai; then
+    echo "  [WARN] opencode-ai install failed — continuing."
 fi
 
-# ── 6. Install OpenClaw AI ─────────────────────────────────────────────────
-echo "[6/7] Installing OpenClaw AI and applying network patch..."
-if ! npm install -g openclaw@latest; then
-    echo "  [WARN] openclaw npm install failed — continuing without it." >&2
+echo "        Installing OpenClaw AI..."
+if ! CI=true npm install -g openclaw@latest; then
+    echo "  [WARN] openclaw install failed — continuing."
 fi
 
+# Network patch (prevents openclaw crashing when it reads network interfaces)
 HIJACK_FILE="${HOME}/hijack.js"
 cat > "$HIJACK_FILE" << 'EOF'
 const os = require('os');
@@ -142,39 +147,59 @@ if ! grep -qF "hijack.js" "$BASHRC" 2>/dev/null; then
     echo "export NODE_OPTIONS=\"-r ${HIJACK_FILE}\"" >> "$BASHRC"
 fi
 
-# ── 7. Set a VNC password (used when connecting via RDP) ───────────────────
-# ~/.vnc/passwd is the binary file vncpasswd writes — if it exists, skip.
-echo "[7/7] Checking VNC password..."
+# ── 5. Set Termux hostname ────────────────────────────────────────────────
+echo "[5/8] Setting hostname..."
+HOSTNAME_FILE="${PREFIX}/etc/hostname"
+if [ ! -f "$HOSTNAME_FILE" ]; then
+    echo "android-linux" > "$HOSTNAME_FILE"
+fi
+TERMUX_HOST=$(cat "$HOSTNAME_FILE")
+hostname "$TERMUX_HOST" 2>/dev/null || true
+echo "  -> Hostname: $TERMUX_HOST"
+
+# ── 6. VNC password ───────────────────────────────────────────────────────
+echo "[6/8] Checking VNC password..."
 if [ ! -f ~/.vnc/passwd ]; then
     echo "  -> No VNC password set. Enter one now (used at the RDP login screen):"
     vncpasswd
 else
-    echo "  -> VNC password already set (~/.vnc/passwd exists), skipping"
-    echo "     To change it, run:  vncpasswd"
+    echo "  -> VNC password already set (~/.vnc/passwd exists), skipping."
+    echo "     To change it, run: vncpasswd"
 fi
+
+# ── 7. Make scripts executable ───────────────────────────────────────────
+echo "[7/8] Making scripts executable..."
+chmod +x "${SCRIPT_DIR}/start.sh" "${SCRIPT_DIR}/stop.sh" 2>/dev/null || true
+
+# ── 8. Detect network and display connection info ─────────────────────────
+echo "[8/8] Gathering network info..."
+
+if command -v ip >/dev/null 2>&1; then
+    LAN_IP=$(ip -4 addr show scope global 2>/dev/null \
+        | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1 || true)
+else
+    LAN_IP=$(ifconfig 2>/dev/null \
+        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1 || true)
+fi
+RDP_USER=$(whoami)
 
 echo ""
 echo "================================================="
 echo "  [setup.sh] Setup complete!"
 echo "================================================="
 echo ""
-echo "  Now run:  ./start.sh"
-echo "  Then connect via RDP to  <your-wifi-ip>:3389"
-
-# Detect Wi-Fi IP (prefer `ip` over deprecated `ifconfig`)
-if command -v ip >/dev/null 2>&1; then
-    WIFI_IP=$(ip -4 addr show scope global 2>/dev/null \
-        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
-else
-    WIFI_IP=$(ifconfig 2>/dev/null \
-        | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
-fi
-if [ -n "${WIFI_IP:-}" ]; then
-    echo "  Wi-Fi IP: $WIFI_IP"
-else
-    echo "  Wi-Fi IP: (run: ip -4 addr show scope global)"
-fi
+echo "  Hostname   : ${TERMUX_HOST}"
+echo "  Username   : ${RDP_USER}"
+echo "  Wi-Fi IP   : ${LAN_IP:-(unknown — run: ip -4 addr show scope global)}"
+echo "  RDP Address: ${LAN_IP:-<phone-ip>}:3389"
 echo ""
-
-# Ensure start.sh and stop.sh are executable
-chmod +x "${SCRIPT_DIR}/start.sh" "${SCRIPT_DIR}/stop.sh" 2>/dev/null || true
+echo "  ┌─ Static IP (recommended) ────────────────────────┐"
+echo "  │ To stop your IP from changing on every reboot:   │"
+echo "  │  Android Wi-Fi Settings → long-press your network│"
+echo "  │  → Modify network → Advanced → IP settings       │"
+echo "  │  → Switch 'DHCP' to 'Static'                     │"
+echo "  │  → Set IP address to: ${LAN_IP:-<current ip>}             │"
+echo "  └───────────────────────────────────────────────────┘"
+echo ""
+echo "  Now run:  ./start.sh"
+echo ""

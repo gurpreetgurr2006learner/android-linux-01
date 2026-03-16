@@ -90,11 +90,49 @@ The core modules and concepts detailed in our environment include:
 - **GPU Acceleration:** Scripts should detect GPUs using `getprop` or standard `glxinfo` checks. Native Turnip/Zink driver mapping operates via `~/.config/linux-gpu.sh` or similar injection variables. Maintain these environment variables (`MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`, etc.) carefully.
 
 ### 5. Script Idempotency and Robustness
-- **`install.sh` & `setup.sh`:** Must handle existing configurations without breaking. Detect if a package is already installed before downloading heavily.
+- **`install.sh` & `setup.sh`:** Must handle existing configurations without breaking. Detect if a package is already installed before downloading heavily. Use flags like `CI=true` to prevent interactive prompts (e.g. `npm install -g`).
 - **`start.sh`:** Must perform pre-flight checks (clearing `.X*` locks, `.vnc/*.pid` files, `.xrdp` stale endpoints) before launching components.
 - **`stop.sh`:** Must be thorough. Hunt and terminate `xrdp`, `xrdp-sesman`, `Xvnc`, `pulseaudio`, `dbus-launch`, and the specific Session Manager processes cleanly. 
+- **Error Handling Details:** Prefer `set -eo pipefail` but carefully consider `set -u` (unbound variable errors) as sourced configurations (like `linux-gpu.sh`) may rely on unset variables. Use traps to catch signals and fail cleanly.
 
 By adhering to these rules, scripts will guarantee stable, optimized configurations within the specialized Linux containerization of Android's Termux.
+
+---
+
+## Part 4: Command Support and Limitations in Termux on Android
+
+### Executive Overview
+Termux is an Android terminal application and Linux environment that provides a packaged userland. It is not a conventional Linux distribution and runs under Android’s app sandbox. Packages are compiled with the Android NDK against Android’s Bionic C library and installed in Termux’s private prefix rather than standard FHS paths such as `/bin` or `/usr`. As a result, binaries built for conventional Linux distributions generally cannot run directly inside Termux unless they are rebuilt or adapted for this environment.
+
+### 1. Structural Limitations
+- **Non-FHS Filesystem & Bionic libc:** Termux binaries are linked against Bionic (Android's libc) rather than glibc. Attempting to use foreign distro packages (like Debian/Ubuntu `.deb` files) directly will usually fail.
+- **Android Sandboxing & `/proc` constraints:** Android isolates apps using Linux UIDs and mounts `/proc` with `hidepid=2`. This limits tools like `ps` to only showing Termux's own processes.
+- **Networking (`/proc/net`):** On Android 10+, apps cannot access `/proc/net`, which means tools like `netstat` and `ifconfig` may fail or return degraded output.
+- **Storage Constraints:** Termux relies on its private app data directory. Shared/external storage typically lacks POSIX semantics (like executability and Unix permissions).
+- **Phantom Process Killing:** On Android 12+, the OS may kill phantom processes above a threshold (typically 32) and processes using excessive CPU. This can abruptly terminate process-heavy Termux workloads (like heavy compiles or complex session trees).
+
+### 2. Supported Command Categories
+- **Core POSIX & GNU Utilities:** Fully supported when installed from Termux repos (e.g., `bash`, `ls`, `grep`, `nano`, `vim`).
+- **Development Tools:** Compilers (`clang`, `make`) and languages (`python`, `node`) are fully supported, subject to the Android 12+ phantom process risk for heavy builds.
+- **System Service Management:** Init systems like `systemd` and `udev` are **not supported** since Termux does not run as PID 1.
+- **Privileged Management:** Commands like `reboot`, `mount`, or kernel module tools require a native root shell and cannot be run by an unprivileged Termux session.
+
+### 3. Supportability Assessment Matrix
+
+| Capability area | Non-root Termux (native) | Termux + proot-distro | Rooted device + native tools |
+|---|---|---|---|
+| Core shells & GNU/POSIX userland | **Fully supported** when installed from Termux repos. | **Fully supported** (in-distro), but overhead and gaps possible. | **Fully supported** (highest flexibility). |
+| Compilers, language runtimes | **Fully supported**, but subject to Android 12+ process killing risks for heavy builds. | **Mostly supported**; heavier process graphs increase Android 12+ risk. | **Fully supported**; still depends on device kernel/SELinux policy. |
+| Full system process visibility (`ps` like desktop Linux) | **Partially supported** due to `/proc` restrictions and hidepid mounting. | **Partially supported** (inherits host kernel restrictions). | **Improved** (root can see more), but still SELinux/ROM‑dependent. |
+| Network interface stats via `/proc/net` | **Partially/not supported** on Android 10+ (blocked). | Same limitation. | Root may restore access depending on policy; varies by ROM/OEM. |
+| Init/service management (`systemctl`, `udev`) | **Not supported** (no PID 1 systemd in Termux). | **Not supported** in typical proot setups; systemd expects init/PID1 semantics. | Possible only with significant control and risk; device stability/security tradeoffs. |
+| Arbitrary writes + POSIX semantics on shared/external storage | **Limited**: shared/external storage lacks executability and POSIX features; termux-setup-storage configures access. | Same limitation; container can’t change filesystem semantics. | Root can expand access; still constrained by filesystem type and SELinux. |
+
+### 4. How to Determine if a Command Works
+1. **Check Termux repos:** Use `pkg search <name>`. If available, it's adapted for Termux.
+2. **System Binaries:** If relying on Android system binaries (e.g., under `/system/bin`), ensure they do not require root. Avoid adding `/system/bin` to `PATH` to prevent conflicts.
+3. **Porting/Building:** If a tool is missing but doesn't require privileged access, compile it natively in Termux to link correctly against Bionic.
+4. **Proot:** For foreign Linux user-space binaries not requiring root kernel features, `proot-distro` can provide an emulation layer, though it inherits Android OS restrictions.
 
 ---
 
