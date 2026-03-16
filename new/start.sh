@@ -79,8 +79,7 @@ export DISPLAY=:0
 
 # ── 6. Print connection info ────────────────────────────────────────────────
 # Detect any active non-loopback IPv4 address (works regardless of interface name)
-LAN_IP=$(ip -4 addr show scope global 2>/dev/null \
-    | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -1)
+LAN_IP=$(ifconfig | grep -Eo '192\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
 RDP_USER=$(whoami)
 echo ""
 echo "==========================================="
