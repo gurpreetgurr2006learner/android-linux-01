@@ -10,7 +10,13 @@
 # HOW TO RUN: bash install.sh
 # =============================================================================
 
-set -e
+set -euo pipefail
+
+# ── Error trap: report line number on unexpected failure ───────────────────
+trap 'echo "" >&2; echo "[install.sh] ERROR: script failed at line $LINENO" >&2; exit 1' ERR
+
+# ── Resolve script directory robustly (handles symlinks) ──────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # -------------- COLORS & UI --------------
 GREEN='\033[0;32m'
@@ -34,7 +40,15 @@ DEVICE_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "Unknown")
 GPU_VENDOR=$(getprop ro.hardware.egl 2>/dev/null || echo "Unknown")
 echo -e "  -> Brand: ${WHITE}${DEVICE_BRAND}${NC} | GPU: ${WHITE}${GPU_VENDOR}${NC}"
 
-if [[ "$GPU_VENDOR" == *"adreno"* ]] || [[ "$DEVICE_BRAND" =~ ^(?i)(samsung|oneplus|xiaomi)$ ]]; then
+# Note: bash does not support (?i) PCRE syntax in [[ =~ ]].
+# Use lowercase comparison for case-insensitive matching.
+GPU_VENDOR_LOWER=$(echo "$GPU_VENDOR" | tr '[:upper:]' '[:lower:]')
+DEVICE_BRAND_LOWER=$(echo "$DEVICE_BRAND" | tr '[:upper:]' '[:lower:]')
+
+if [[ "$GPU_VENDOR_LOWER" == *"adreno"* ]] \
+    || [[ "$DEVICE_BRAND_LOWER" == "samsung" ]] \
+    || [[ "$DEVICE_BRAND_LOWER" == "oneplus" ]] \
+    || [[ "$DEVICE_BRAND_LOWER" == "xiaomi" ]]; then
     GPU_DRIVER="freedreno"
     echo -e "  -> Hardware Acceleration: ${GREEN}Supported (Adreno/Turnip)${NC}"
 else
@@ -51,8 +65,8 @@ echo -e "  ${WHITE}3) MATE${NC}        (Classic UI)"
 echo -e "  ${WHITE}4) KDE Plasma${NC}  (Heavy, requires strong GPU/RAM)"
 echo ""
 while true; do
-    read -p "Enter number (1-4) [default: 1]: " DE_INPUT
-    DE_INPUT=${DE_INPUT:-1}
+    read -r -p "Enter number (1-4) [default: 1]: " DE_INPUT
+    DE_INPUT="${DE_INPUT:-1}"
     if [[ "$DE_INPUT" =~ ^[1-4]$ ]]; then
         break
     else
@@ -60,12 +74,12 @@ while true; do
     fi
 done
 
-DE_CHOICE=$DE_INPUT
-case $DE_CHOICE in
-    1) DE_NAME="XFCE4"; START_CMD="startxfce4"; SESSION_PROC="xfce4-session"; PANEL_PROC="plank" ;;
-    2) DE_NAME="LXQt"; START_CMD="startlxqt"; SESSION_PROC="lxqt-session"; PANEL_PROC="" ;;
-    3) DE_NAME="MATE"; START_CMD="mate-session"; SESSION_PROC="mate-session"; PANEL_PROC="plank" ;;
-    4) DE_NAME="KDE Plasma"; START_CMD="startplasma-x11"; SESSION_PROC="startplasma-x11"; PANEL_PROC="kwin_x11" ;;
+DE_CHOICE="$DE_INPUT"
+case "$DE_CHOICE" in
+    1) DE_NAME="XFCE4";      START_CMD="startxfce4";       SESSION_PROC="xfce4-session"; PANEL_PROC="plank"       ;;
+    2) DE_NAME="LXQt";       START_CMD="startlxqt";        SESSION_PROC="lxqt-session";  PANEL_PROC=""            ;;
+    3) DE_NAME="MATE";       START_CMD="mate-session";     SESSION_PROC="mate-session";  PANEL_PROC="plank"       ;;
+    4) DE_NAME="KDE Plasma"; START_CMD="startplasma-x11";  SESSION_PROC="startplasma-x11"; PANEL_PROC="kwin_x11"  ;;
 esac
 
 echo -e "\n${GREEN}[+] Selected: ${DE_NAME}${NC}\n"
@@ -108,8 +122,8 @@ export MESA_LOADER_DRIVER_OVERRIDE=zink
 export TU_DEBUG=noconform
 export MESA_VK_WSI_PRESENT_MODE=immediate
 export ZINK_DESCRIPTORS=lazy
-export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:${XDG_DATA_DIRS}
-export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:${XDG_CONFIG_DIRS}
+export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:${XDG_DATA_DIRS:-}
+export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:${XDG_CONFIG_DIRS:-}
 EOF
 
 if [ "$DE_CHOICE" == "4" ]; then
@@ -120,9 +134,11 @@ fi
 echo -e "${PURPLE}[5/7] Installing Web Browsers, Media, Python, Node.js, Wine, OpenCode...${NC}"
 pkg install -y firefox vlc git wget curl python nodejs hangover-wine hangover-wowbox64
 
-# OpenCode AI
+# OpenCode AI (allow failure — not critical)
 echo "  -> Installing OpenCode AI CLI..."
-npm install -g opencode-ai
+if ! npm install -g opencode-ai; then
+    echo "  [WARN] opencode-ai npm install failed — continuing without it." >&2
+fi
 
 # Python Demo
 mkdir -p ~/demo_python
@@ -144,11 +160,13 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 EOF
 
-# Wine Fixes
-ln -sf /data/data/com.termux/files/usr/opt/hangover-wine/bin/wine /data/data/com.termux/files/usr/bin/wine || true
-ln -sf /data/data/com.termux/files/usr/opt/hangover-wine/bin/winecfg /data/data/com.termux/files/usr/bin/winecfg || true
+# Wine Fixes — use -sf to idempotently update symlinks
+WINE_BIN_DIR="/data/data/com.termux/files/usr/opt/hangover-wine/bin"
+TERMUX_BIN_DIR="/data/data/com.termux/files/usr/bin"
+ln -sf "${WINE_BIN_DIR}/wine"    "${TERMUX_BIN_DIR}/wine"    || true
+ln -sf "${WINE_BIN_DIR}/winecfg" "${TERMUX_BIN_DIR}/winecfg" || true
 
-# Shortcuts
+# Desktop Shortcuts
 mkdir -p ~/Desktop
 cat > ~/Desktop/Firefox.desktop << 'EOF'
 [Desktop Entry]
@@ -164,11 +182,12 @@ Exec=vlc
 Icon=vlc
 Type=Application
 EOF
-chmod +x ~/Desktop/*.desktop 2>/dev/null || true
+chmod +x ~/Desktop/Firefox.desktop ~/Desktop/VLC.desktop 2>/dev/null || true
 
 # -------------- 6. RDP & VNC CONFIG --------------
 echo -e "${PURPLE}[6/7] Configuring VNC and xRDP for ${DE_NAME}...${NC}"
 mkdir -p ~/.vnc
+# Expand $START_CMD at write time (no single-quote EOF)
 cat > ~/.vnc/xstartup << EOF
 #!/data/data/com.termux/files/usr/bin/bash
 unset SESSION_MANAGER
@@ -186,7 +205,8 @@ exit 0
 EOF
 chmod +x ~/.xsession
 
-XRDP_CONF="$PREFIX/etc/xrdp/xrdp.ini"
+XRDP_CONF="${PREFIX}/etc/xrdp/xrdp.ini"
+mkdir -p "$(dirname "$XRDP_CONF")"
 cat > "$XRDP_CONF" << 'EOF'
 [Globals]
 ini_version=1
@@ -233,40 +253,49 @@ EOF
 if [ ! -f ~/.vnc/passwd ]; then
     echo "  -> No VNC password set. Enter one now (used at the RDP login screen):"
     vncpasswd
+else
+    echo "  -> VNC password already set (~/.vnc/passwd exists), skipping"
 fi
 
 # -------------- 7. PATCH START/STOP SCRIPTS --------------
 echo -e "${PURPLE}[7/7] Updating local start.sh and stop.sh for ${DE_NAME}...${NC}"
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 
-if [ -f "$SCRIPT_DIR/start.sh" ]; then
-    # Patch the exec line at the end
-    sed -i "s/exec startxfce4/exec ${START_CMD}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/exec startlxqt/exec ${START_CMD}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/exec mate-session/exec ${START_CMD}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/exec startplasma-x11/exec ${START_CMD}/g" "$SCRIPT_DIR/start.sh"
+# All known DE launch commands and session processes
+ALL_START_CMDS=("startxfce4" "startlxqt" "mate-session" "startplasma-x11")
+ALL_SESSION_PROCS=("xfce4-session" "lxqt-session" "mate-session" "startplasma-x11")
+ALL_PANEL_PROCS=("plank" "kwin_x11")
 
-    # Patch process kills
-    sed -i "s/pkill -9 xfce4-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/pkill -9 lxqt-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/pkill -9 mate-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/start.sh"
-    sed -i "s/pkill -9 startplasma-x11/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/start.sh"
-    
-    if [ -n "$PANEL_PROC" ]; then
-        sed -i "s/pkill -9 plank/pkill -9 ${PANEL_PROC}/g" "$SCRIPT_DIR/start.sh"
+patch_script() {
+    local target="$1"
+    [ -f "$target" ] || return 0
+
+    # Replace all known exec lines → new DE
+    for cmd in "${ALL_START_CMDS[@]}"; do
+        sed -i "s|exec ${cmd}|exec ${START_CMD}|g" "$target"
+    done
+
+    # Replace all known session kills → new session proc
+    for proc in "${ALL_SESSION_PROCS[@]}"; do
+        sed -i "s|pkill -TERM ${proc}|pkill -TERM ${SESSION_PROC}|g" "$target"
+        sed -i "s|pkill -KILL ${proc}|pkill -KILL ${SESSION_PROC}|g" "$target"
+        # Legacy -9 form (in case the script wasn't yet hardened)
+        sed -i "s|pkill -9 ${proc}|pkill -TERM ${SESSION_PROC}|g" "$target"
+    done
+
+    # Replace panel process if set
+    if [ -n "${PANEL_PROC:-}" ]; then
+        for proc in "${ALL_PANEL_PROCS[@]}"; do
+            sed -i "s|pkill -TERM ${proc}|pkill -TERM ${PANEL_PROC}|g" "$target"
+            sed -i "s|pkill -KILL ${proc}|pkill -KILL ${PANEL_PROC}|g" "$target"
+            sed -i "s|pkill -9 ${proc}|pkill -TERM ${PANEL_PROC}|g" "$target"
+        done
     fi
-fi
 
-if [ -f "$SCRIPT_DIR/stop.sh" ]; then
-    sed -i "s/pkill -9 xfce4-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/stop.sh"
-    sed -i "s/pkill -9 lxqt-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/stop.sh"
-    sed -i "s/pkill -9 mate-session/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/stop.sh"
-    sed -i "s/pkill -9 startplasma-x11/pkill -9 ${SESSION_PROC}/g" "$SCRIPT_DIR/stop.sh"
-    
-    if [ -n "$PANEL_PROC" ]; then
-        sed -i "s/pkill -9 plank/pkill -9 ${PANEL_PROC}/g" "$SCRIPT_DIR/stop.sh"
-    fi
-fi
+    echo "  -> Patched: $target"
+}
+
+patch_script "${SCRIPT_DIR}/start.sh"
+patch_script "${SCRIPT_DIR}/stop.sh"
 
 echo ""
 echo -e "${GREEN}================================================${NC}"

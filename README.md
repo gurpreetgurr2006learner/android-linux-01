@@ -1,5 +1,7 @@
 # Termux Linux Premium Setup & RDP Scripts
 
+> **Author:** [abzach8](https://github.com/abzach8)
+
 ## Part 1: Simple Steps to Set Up
 
 This repository provides scripts to install and run a hardware-accelerated Linux Desktop Environment inside **Termux** on an Android device, accessible locally through **Termux:X11** or remotely via an **RDP Client**.
@@ -98,6 +100,8 @@ By adhering to these rules, scripts will guarantee stable, optimized configurati
 
 ## License & Disclaimer
 
-This project and its scripts are provided **free for personal use**. 
+This project and its scripts are provided **free for personal use**.
+
+**Author:** [abzach8](https://github.com/abzach8)
 
 **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software. You use these scripts at your own risk.
