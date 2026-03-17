@@ -26,7 +26,7 @@ chmod +x *.sh
 ```
 Follow the interactive prompts to select your Desktop Environment (XFCE4, LXQt, MATE, or KDE Plasma) and enter a VNC password when asked. This password will be used for your RDP connections.
 
-**(Alternative Silent Setup):** Run `./setup.sh` instead for an idempotent, silent XFCE4 installation.
+**(Alternative Silent Setup):** Run `./setup.sh` instead for an idempotent, silent XFCE4 installation. It also pre-installs AI CLI tools like OpenCode AI and OpenClaw.
 
 **4. Start the Desktop:**
 ```bash
@@ -55,6 +55,7 @@ The core modules and concepts detailed in our environment include:
 - **Hardware Acceleration:** Native GPU capability (Freedreno/Turnip for Adreno and Zink fallback) is wired into the scripts ensuring smooth desktop performance on Android hardware.
 - **Termux Runtime Limitations:** Explanations of how Android deviates from standard Linux. Covering concepts like why some Debian packages fail, the absence of `systemd`, and how Termux's non-standard file system (Prefix) limits paths.
 - **Security & Sandboxing:** Documentation on Android's rigid permissions, covering restricted `/proc/net` access, process isolation (`hidepid=2`), and external storage behaviors.
+- **AI Tooling Integration:** Native installation and configuration of `opencode-ai` and `openclaw`, including necessary Node.js network patching to ensure they run seamlessly under Android network constraints.
 - **Phantom Process Killing:** Insight on Android 12+ aggressive task termination algorithms and how it affects background development chains inside Termux.
 
 ---
