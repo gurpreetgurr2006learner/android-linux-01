@@ -169,4 +169,5 @@ echo ""
 
 # ── 7. Launch desktop (blocking — keeps the terminal session alive) ───────
 echo "[6/6] Launching ${DE_NAME} on local display..."
-exec startxfce4
+mkdir -p ~/.vnc
+exec ${START_CMD} > ~/.vnc/local_display.log 2>&1

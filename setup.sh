@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup.sh — Idempotent config writer (safe to run multiple times)
+# setup.sh — RDP, Node.js, and System Config (Idempotent)
 # =============================================================================
-# Reads the DE choice saved by install.sh, then:
-#   • Updates pkg and apt packages
-#   • Writes all service config files (xstartup, xrdp.ini, etc.)
-#   • Installs CLI tools via npm (opencode-ai, openclaw)
-#   • Sets the Termux hostname
-#   • Prompts for VNC password (if not already set)
-#   • Displays connection info: IP, hostname, username
+# Run this after install.sh to generate required configuration files for RDP,
+# VNC, xstartup, Node.js CLI tools, etc. Safe to run multiple times!
 #
-# HOW TO RUN: bash setup.sh  (run after install.sh, or alone for XFCE4)
+# HOW TO RUN: bash setup.sh
 # =============================================================================
 
 set -eo pipefail   # NOTE: -u intentionally omitted — sourced conf files may
@@ -21,10 +16,18 @@ trap 'echo "" >&2; echo "[setup.sh] ERROR at line $LINENO — setup aborted." >&
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 
+# -------------- COLORS -------------------------------------------------------
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+YELLOW='\033[1;33m'
+WHITE='\033[1;37m'
+NC='\033[0m'
+
 echo ""
-echo "================================================="
-echo "  [setup.sh] Configuring Termux RDP environment"
-echo "================================================="
+echo -e "${CYAN}=================================================${NC}"
+echo -e "${CYAN}  [setup.sh] Configuring Termux RDP environment${NC}"
+echo -e "${CYAN}=================================================${NC}"
 echo ""
 
 # Default values — will be overridden if conf exists
@@ -42,20 +45,13 @@ echo "  DE: ${DE_NAME} / launch: ${START_CMD}"
 echo ""
 
 # ── 1. Update Termux packages (pkg wraps apt; both are run for completeness) ─
-echo "[1/8] Updating Termux packages (pkg)..."
-pkg update -y
-pkg upgrade -y
-
-# apt is also available directly in Termux and may be needed by proot containers
-echo "[1/8] Updating apt packages..."
+echo "[1/6] Updating packages..."
 apt update -y  2>/dev/null || true
 apt upgrade -y 2>/dev/null || true
 
 # ── 2. Write VNC startup script ───────────────────────────────────────────
-# Uses chosen DE's start command; always rewritten so re-running fixes issues.
-echo "[2/8] Writing ~/.vnc/xstartup (${START_CMD})..."
+echo -e "${PURPLE}[2/6] Writing ~/.vnc/xstartup (${START_CMD})...${NC}"
 mkdir -p ~/.vnc
-# Note: *unquoted* EOF so ${START_CMD} is expanded into the file
 cat > ~/.vnc/xstartup << EOF
 #!/usr/bin/env bash
 unset SESSION_MANAGER
@@ -67,15 +63,14 @@ exec dbus-launch --exit-with-session ${START_CMD}
 EOF
 chmod +x ~/.vnc/xstartup
 
-# Neutralize .xsession so the DE doesn't launch twice on the VNC display
 cat > ~/.xsession << 'EOF'
 #!/usr/bin/env sh
 exit 0
 EOF
 chmod +x ~/.xsession
 
-# ── 3. Write xrdp.ini —  VNC backend on port 5901 ───────────────────────
-echo "[3/8] Writing xrdp.ini..."
+# ── 3. Write xrdp.ini ───────────────────────────────────────────────────
+echo -e "${PURPLE}[3/6] Writing xrdp.ini...${NC}"
 XRDP_CONF="${PREFIX}/etc/xrdp/xrdp.ini"
 mkdir -p "$(dirname "$XRDP_CONF")"
 cat > "$XRDP_CONF" << 'EOF'
@@ -121,21 +116,15 @@ ip=127.0.0.1
 port=5901
 EOF
 
-# ── 4. Install OpenCode AI CLI and OpenClaw (npm, idempotent) ───────────
-echo "[4/8] Installing OpenCode AI CLI..."
-# CI=true: prevents node postinstall scripts from running interactive REPLs.
-# Do NOT use 2>/dev/null here — it hides npm output but still lets interactive
-# postinstall scripts inherit the terminal (which opens a Node.js REPL).
-if ! CI=true npm install -g opencode-ai; then
+# ── 4. Install OpenCode AI CLI and OpenClaw ────────────────────────────
+echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI & OpenClaw...${NC}"
+if ! CI=true npm install -g opencode-ai >/dev/null 2>&1; then
     echo "  [WARN] opencode-ai install failed — continuing."
 fi
-
-echo "        Installing OpenClaw AI..."
-if ! CI=true npm install -g openclaw@latest; then
+if ! CI=true npm install -g openclaw@latest >/dev/null 2>&1; then
     echo "  [WARN] openclaw install failed — continuing."
 fi
 
-# Network patch (prevents openclaw crashing when it reads network interfaces)
 HIJACK_FILE="${HOME}/hijack.js"
 cat > "$HIJACK_FILE" << 'EOF'
 const os = require('os');
@@ -147,33 +136,55 @@ if ! grep -qF "hijack.js" "$BASHRC" 2>/dev/null; then
     echo "export NODE_OPTIONS=\"-r ${HIJACK_FILE}\"" >> "$BASHRC"
 fi
 
-# ── 5. Set Termux hostname ────────────────────────────────────────────────
-echo "[5/8] Setting hostname..."
+# ── 5. Set Termux hostname ─────────────────────────────────────────────
+echo -e "${PURPLE}[5/6] Setting hostname...${NC}"
 HOSTNAME_FILE="${PREFIX}/etc/hostname"
 if [ ! -f "$HOSTNAME_FILE" ]; then
     echo "android-linux" > "$HOSTNAME_FILE"
 fi
 TERMUX_HOST=$(cat "$HOSTNAME_FILE")
-hostname "$TERMUX_HOST" 2>/dev/null || true
+if [ "$(uname -o 2>/dev/null)" != "Android" ]; then
+    hostname "$TERMUX_HOST" 2>/dev/null || true
+fi
 echo "  -> Hostname: $TERMUX_HOST"
 
-# ── 6. VNC password ───────────────────────────────────────────────────────
-echo "[6/8] Checking VNC password..."
+# ── 6. VNC password ────────────────────────────────────────────────────
+echo -e "${PURPLE}[6/6] Checking VNC password...${NC}"
 if [ ! -f ~/.vnc/passwd ]; then
-    echo "  -> No VNC password set. Enter one now (used at the RDP login screen):"
+    echo -e "${YELLOW}  -> No VNC password set. Enter one now (used at the RDP login screen):${NC}"
     vncpasswd
 else
     echo "  -> VNC password already set (~/.vnc/passwd exists), skipping."
-    echo "     To change it, run: vncpasswd"
 fi
 
-# ── 7. Make scripts executable ───────────────────────────────────────────
-echo "[7/8] Making scripts executable..."
-chmod +x "${SCRIPT_DIR}/start.sh" "${SCRIPT_DIR}/stop.sh" 2>/dev/null || true
+# ── PATH PATCH START/STOP SCRIPTS ───────────────────────────────────────
+echo -e "${PURPLE}[*] Patching local start.sh and stop.sh for ${DE_NAME}...${NC}"
 
-# ── 8. Detect network and display connection info ─────────────────────────
-echo "[8/8] Gathering network info..."
+ALL_START_CMDS=("startxfce4" "startlxqt" "mate-session" "startplasma-x11")
+ALL_SESSION_PROCS=("xfce4-session" "lxqt-session" "mate-session" "startplasma-x11")
+ALL_PANEL_PROCS=("plank" "kwin_x11")
 
+patch_script() {
+    local target="$1"
+    [ -f "$target" ] || return 0
+    for cmd in "${ALL_START_CMDS[@]}"; do
+        sed -i "s|exec ${cmd}|exec ${START_CMD}|g" "$target"
+    done
+    for proc in "${ALL_SESSION_PROCS[@]}"; do
+        sed -i "s|graceful_kill ${proc}|graceful_kill ${SESSION_PROC}|g" "$target"
+    done
+    if [ -n "${PANEL_PROC}" ]; then
+        for proc in "${ALL_PANEL_PROCS[@]}"; do
+            sed -i "s|graceful_kill ${proc}|graceful_kill ${PANEL_PROC}|g" "$target"
+        done
+    fi
+    chmod +x "$target"
+}
+
+patch_script "${SCRIPT_DIR}/start.sh"
+patch_script "${SCRIPT_DIR}/stop.sh"
+
+# ── Detect network and display connection info ─────────────────────────
 if command -v ip >/dev/null 2>&1; then
     LAN_IP=$(ip -4 addr show scope global 2>/dev/null \
         | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1 || true)
@@ -184,9 +195,9 @@ fi
 RDP_USER=$(whoami)
 
 echo ""
-echo "================================================="
-echo "  [setup.sh] Setup complete!"
-echo "================================================="
+echo -e "${GREEN}=================================================${NC}"
+echo -e "${GREEN}  [setup.sh] Setup complete!${NC}"
+echo -e "${GREEN}=================================================${NC}"
 echo ""
 echo "  Hostname   : ${TERMUX_HOST}"
 echo "  Username   : ${RDP_USER}"
@@ -201,5 +212,5 @@ echo "  │  → Switch 'DHCP' to 'Static'                     │"
 echo "  │  → Set IP address to: ${LAN_IP:-<current ip>}             │"
 echo "  └───────────────────────────────────────────────────┘"
 echo ""
-echo "  Now run:  ./start.sh"
+echo -e "  Now run:  ${WHITE}./start.sh${NC}"
 echo ""

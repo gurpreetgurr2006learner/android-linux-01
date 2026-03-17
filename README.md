@@ -136,6 +136,49 @@ Termux is an Android terminal application and Linux environment that provides a 
 
 ---
 
+## Part 5: Investigation Reports
+
+### Investigation Report: hijack.js
+The file `hijack.js` is a legitimate patch created by the `setup.sh` script in this repository. It is not malicious.
+
+**Purpose**
+The file is used as a "Network patch" to prevent the `openclaw` AI CLI from crashing. In some environments (like Termux on Android), certain Node.js functions that access network interfaces can cause errors.
+
+`hijack.js` contains a simple mock that overrides the `os.networkInterfaces()` function:
+
+```javascript
+const os = require('os');
+os.networkInterfaces = () => ({});
+```
+
+**How It's Created**
+The logic for creating this file can be found in `setup.sh`:
+
+```bash
+# Network patch (prevents openclaw crashing when it reads network interfaces)
+HIJACK_FILE="${HOME}/hijack.js"
+cat > "$HIJACK_FILE" << 'EOF'
+const os = require('os');
+os.networkInterfaces = () => ({});
+EOF
+BASHRC="${HOME}/.bashrc"
+if ! grep -qF "hijack.js" "$BASHRC" 2>/dev/null; then
+    echo "export NODE_OPTIONS=\"-r ${HIJACK_FILE}\"" >> "$BASHRC"
+fi
+```
+
+**Activation**
+It is automatically loaded by Node.js whenever you run a script, because the `setup.sh` script adds it to your `NODE_OPTIONS` environment variable in your `.bashrc` file.
+
+**Recommendation**
+If you are using `openclaw` or `opencode-ai`, you should keep this file. If you remove it, those tools may crash when attempting to access network information.
+
+If you don't intend to use those tools and want to clean up, you should:
+1. Remove the line `export NODE_OPTIONS="-r /path/to/hijack.js"` from your `.bashrc`.
+2. Delete the `hijack.js` file.
+
+---
+
 ## License & Disclaimer
 
 This project and its scripts are provided **free for personal use**.
