@@ -78,14 +78,19 @@ echo ""
 # the entire shell even though we have || true (|| true only catches exit codes,
 # not set -u termination which happens before the command returns).
 echo "[0/6] Loading GPU acceleration config..."
+echo "[0/7] Loading GPU acceleration config..."
 set +u
 # shellcheck disable=SC1090
 source ~/.config/linux-gpu.sh 2>/dev/null || true
 set -u
 echo "        done."
 
-# ── 1. Clean up stale sessions ────────────────────────────────────────────
-echo "[1/6] Cleaning up old sessions..."
+# ── 1. Prepare environment and clean up stale sessions ────────────────────
+echo "[1/7] Preparing environment variables and cleaning up old sessions..."
+if [ -f "$HOME/.bashrc" ]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.bashrc"
+fi
 graceful_kill "termux.x11" 4 "-f"
 graceful_kill xfce4-session
 graceful_kill plank

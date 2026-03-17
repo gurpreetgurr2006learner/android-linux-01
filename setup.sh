@@ -44,10 +44,10 @@ fi
 echo "  DE: ${DE_NAME} / launch: ${START_CMD}"
 echo ""
 
-# ── 1. Update Termux packages (pkg wraps apt; both are run for completeness) ─
+# ── 1. Update Termux packages (pkg wraps apt) ───────────────────────────────────
 echo "[1/6] Updating packages..."
-apt update -y  2>/dev/null || true
-apt upgrade -y 2>/dev/null || true
+pkg update -y  2>/dev/null || true
+pkg upgrade -y 2>/dev/null || true
 
 # ── 2. Write VNC startup script ───────────────────────────────────────────
 echo -e "${PURPLE}[2/6] Writing ~/.vnc/xstartup (${START_CMD})...${NC}"
@@ -119,7 +119,7 @@ EOF
 # ── 4. Install OpenCode AI CLI and OpenClaw ────────────────────────────
 echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI & OpenClaw...${NC}"
 
-HIJACK_FILE="${HOME}/hijack.js"
+HIJACK_FILE="${PREFIX}/etc/hijack.js"
 cat > "$HIJACK_FILE" << 'EOF'
 const os = require('os');
 os.networkInterfaces = () => ({});
@@ -144,9 +144,8 @@ fi
 
 
 BASHRC="${HOME}/.bashrc"
-if ! grep -qF "hijack.js" "$BASHRC" 2>/dev/null; then
-    echo "export NODE_OPTIONS=\"-r ${HIJACK_FILE}\"" >> "$BASHRC"
-fi
+sed -i '/hijack.js/d' "$BASHRC" 2>/dev/null || true
+echo "export NODE_OPTIONS=\"-r ${HIJACK_FILE}\"" >> "$BASHRC"
 
 # ── 5. Set Termux hostname ─────────────────────────────────────────────
 echo -e "${PURPLE}[5/6] Setting hostname...${NC}"

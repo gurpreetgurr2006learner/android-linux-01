@@ -78,7 +78,7 @@ async_loader() {
 grab_pkg() {
     local target_pkg=$1
     local display_val=${2:-$target_pkg}
-    (DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" "$target_pkg" > /dev/null 2>&1) &
+    (pkg install -y "$target_pkg" > /dev/null 2>&1) &
     async_loader $! "Procuring $display_val"
 }
 
@@ -140,9 +140,9 @@ CONF_EOF
 module_base_sync() {
     render_bar
     echo -e "${COL_MAG}Synchronizing package indices...${NO_COL}\n"
-    (DEBIAN_FRONTEND=noninteractive apt-get update -y > /dev/null 2>&1) &
+    (pkg update -y > /dev/null 2>&1) &
     async_loader $! "Syncing apt cache"
-    (DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q -o Dpkg::Options::="--force-confold" > /dev/null 2>&1) &
+    (pkg upgrade -y > /dev/null 2>&1) &
     async_loader $! "Patching out-of-date bins"
 }
 
