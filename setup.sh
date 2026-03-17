@@ -116,8 +116,10 @@ ip=127.0.0.1
 port=5901
 EOF
 
-# ── 4. Install OpenCode AI CLI and OpenClaw ────────────────────────────
-echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI & OpenClaw...${NC}"
+# ── 4. Install OpenCode AI CLI, OpenClaw, VS Code, & Chromium ────────────
+echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI, OpenClaw, VS Code, & Chromium...${NC}"
+
+pkg install -y code-oss chromium >/dev/null 2>&1 || true
 
 HIJACK_FILE="${PREFIX}/etc/hijack.js"
 cat > "$HIJACK_FILE" << 'EOF'
@@ -263,7 +265,7 @@ fi
 # ── 3. Tool verification ───────────────────────────────────────────────────
 echo "▶ [3/4] Verifying CLI tools and OpenCode..."
 ALL_GOOD=true
-TOOLS_TO_CHECK=("opencode-ai" "openclaw" "node" "npm")
+TOOLS_TO_CHECK=("opencode-ai" "openclaw" "node" "npm" "code-oss" "chromium")
 
 for tool in "${TOOLS_TO_CHECK[@]}"; do
     if command -v "$tool" >/dev/null 2>&1; then
