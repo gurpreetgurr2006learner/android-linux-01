@@ -118,6 +118,13 @@ EOF
 
 # ── 4. Install OpenCode AI CLI and OpenClaw ────────────────────────────
 echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI & OpenClaw...${NC}"
+
+HIJACK_FILE="${HOME}/hijack.js"
+cat > "$HIJACK_FILE" << 'EOF'
+const os = require('os');
+os.networkInterfaces = () => ({});
+EOF
+
 if [ "$(uname -o 2>/dev/null)" = "Android" ]; then
     if ! npm i -g opencode-ai opencode-android-arm64 --ignore-scripts; then
         echo "  [WARN] opencode-ai install failed via npm — continuing."
@@ -134,11 +141,7 @@ if ! CI=true npm install -g openclaw@latest >/dev/null 2>&1; then
     echo "  [WARN] openclaw install failed — continuing."
 fi
 
-HIJACK_FILE="${HOME}/hijack.js"
-cat > "$HIJACK_FILE" << 'EOF'
-const os = require('os');
-os.networkInterfaces = () => ({});
-EOF
+
 
 BASHRC="${HOME}/.bashrc"
 if ! grep -qF "hijack.js" "$BASHRC" 2>/dev/null; then
@@ -221,5 +224,78 @@ echo "  │  → Switch 'DHCP' to 'Static'                     │"
 echo "  │  → Set IP address to: ${LAN_IP:-<current ip>}             │"
 echo "  └───────────────────────────────────────────────────┘"
 echo ""
+echo ""
+echo -e "${CYAN}=================================================${NC}"
+echo -e "${CYAN}  [setup.sh] Testing Environment Startup (Verification)${NC}"
+echo -e "${CYAN}=================================================${NC}"
+echo ""
+
+# ── 1. Start everything in the background ─────────────────────────────────
+echo "▶ [1/4] Starting the environment (asynchronous)..."
+"${SCRIPT_DIR}/start.sh" &
+START_PID=$!
+
+# Give start.sh a moment to launch Xvnc and xrdp
+sleep 5
+
+# ── 2. Wait properly for key processes and port ────────────────────────────
+echo "▶ [2/4] Waiting for services to fully initialize..."
+WAIT_TIMEOUT=60
+WAITED=0
+SERVICES_READY=false
+
+while [ $WAITED -lt $WAIT_TIMEOUT ]; do
+    if pgrep -f "xrdp" >/dev/null && pgrep -f "Xvnc" >/dev/null; then
+        SERVICES_READY=true
+        break
+    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+done
+
+if [ "$SERVICES_READY" = true ]; then
+    echo "  -> Services are up after ${WAITED}s."
+    sleep 5
+else
+    echo "  -> [WARN] Timed out waiting for Xvnc/xrdp after ${WAIT_TIMEOUT}s."
+    echo "  -> Continuing to verification anyway..."
+fi
+
+# ── 3. Tool verification ───────────────────────────────────────────────────
+echo "▶ [3/4] Verifying CLI tools and OpenCode..."
+ALL_GOOD=true
+TOOLS_TO_CHECK=("opencode-ai" "openclaw" "node" "npm")
+
+for tool in "${TOOLS_TO_CHECK[@]}"; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        VER=$("$tool" --version 2>/dev/null | head -n 1 || echo "installed")
+        echo "  -> [OK] ${tool} is available (version/status: ${VER})"
+    else
+        echo "  -> [FAIL] ${tool} is missing from PATH or not installed."
+        ALL_GOOD=false
+    fi
+done
+
+echo ""
+if [ "$ALL_GOOD" = true ]; then
+    echo "  ✅ All essential tools verified!"
+else
+    echo "  ❌ Some tools were not found. Please review the output above."
+fi
+echo ""
+
+# ── 4. Graceful stop ───────────────────────────────────────────────────────
+echo "▶ [4/4] Stopping the environment gracefully..."
+"${SCRIPT_DIR}/stop.sh"
+
+kill "$START_PID" 2>/dev/null || true
+wait "$START_PID" 2>/dev/null || true
+
+echo ""
+echo -e "${GREEN}=================================================${NC}"
+echo -e "${GREEN}  [setup.sh] First-time verification complete.${NC}"
+echo -e "${GREEN}=================================================${NC}"
+echo ""
+
 echo -e "  Now run:  ${WHITE}./start.sh${NC}"
 echo ""
