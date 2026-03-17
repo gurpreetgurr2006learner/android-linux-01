@@ -118,10 +118,16 @@ EOF
 
 # ── 4. Install OpenCode AI CLI and OpenClaw ────────────────────────────
 echo -e "${PURPLE}[4/6] Installing OpenCode AI CLI & OpenClaw...${NC}"
-if ! curl -fsSL https://opencode.ai/install | bash; then
-    echo "  [WARN] opencode-ai install failed via curl, trying npm..."
-    if ! npm i -g opencode-ai; then
-        echo "  [WARN] opencode-ai install failed — continuing."
+if [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+    if ! npm i -g opencode-ai opencode-android-arm64 --ignore-scripts; then
+        echo "  [WARN] opencode-ai install failed via npm — continuing."
+    fi
+else
+    if ! curl -fsSL https://opencode.ai/install | bash; then
+        echo "  [WARN] opencode-ai install failed via curl, trying npm..."
+        if ! npm i -g opencode-ai; then
+            echo "  [WARN] opencode-ai install failed — continuing."
+        fi
     fi
 fi
 if ! CI=true npm install -g openclaw@latest >/dev/null 2>&1; then

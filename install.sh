@@ -1,278 +1,233 @@
 #!/data/data/com.termux/files/usr/bin/bash
-#######################################################
-#  Termux Linux Setup Script
-#  
-#  Features:
-#  - Choice of Desktop Environment (XFCE, LXQt, MATE, KDE)
-#  - Smart GPU acceleration detection (Turnip/Zink)
-#  - Productivity and Media tools (VLC, Firefox)
-#  - Python & Web Dev environment pre-installed
-#  - Windows App Support (Wine/Hangover)
-#######################################################
+# ==============================================================================
+# Termux Linux Environment Bootstrapper
+# ==============================================================================
 
-# ============== CONFIGURATION ==============
-TOTAL_STEPS=11
-CURRENT_STEP=0
-DE_CHOICE="1"
-DE_NAME="XFCE4"
-START_CMD="startxfce4"
-SESSION_PROC="xfce4-session"
-PANEL_PROC="plank"
+# --- Configuration Constants ---
+MAX_PHASES=11
+CURRENT_PHASE=0
+DEV_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "Unknown")
+DEV_MODEL=$(getprop ro.product.model 2>/dev/null || echo "Unknown")
+SYS_VERSION=$(getprop ro.build.version.release 2>/dev/null || echo "Unknown")
+GPU_EGL=$(getprop ro.hardware.egl 2>/dev/null || echo "")
 
-# ============== COLORS ==============
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-GRAY='\033[0;90m'
-NC='\033[0m'
-BOLD='\033[1m'
+CHOSEN_INTERFACE="1"
+UI_IDENTIFIER="XFCE4"
+STARTUP_APP="startxfce4"
+SESSION_LEADER="xfce4-session"
+DOCK_COMPONENT="plank"
 
-# ============== PROGRESS FUNCTIONS ==============
-update_progress() {
-    CURRENT_STEP=$((CURRENT_STEP + 1))
-    PERCENT=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-    
-    FILLED=$((PERCENT / 5))
-    EMPTY=$((20 - FILLED))
-    
-    BAR="${GREEN}"
-    for ((i=0; i<FILLED; i++)); do BAR+="*"; done
-    BAR+="${GRAY}"
-    for ((i=0; i<EMPTY; i++)); do BAR+="-"; done
-    BAR+="${NC}"
-    
-    echo ""
-    echo -e "${WHITE}------------------------------------------------------------${NC}"
-    echo -e "${CYAN}  OVERALL PROGRESS: ${WHITE}Step ${CURRENT_STEP}/${TOTAL_STEPS}${NC} ${BAR} ${WHITE}${PERCENT}%${NC}"
-    echo -e "${WHITE}------------------------------------------------------------${NC}"
-    echo ""
+# --- Styling Options ---
+COL_RED='\033[38;5;196m'
+COL_GRN='\033[38;5;46m'
+COL_YLW='\033[38;5;226m'
+COL_BLU='\033[38;5;33m'
+COL_MAG='\033[38;5;201m'
+COL_CYN='\033[38;5;51m'
+COL_WHT='\033[38;5;231m'
+COL_GRY='\033[38;5;244m'
+NO_COL='\033[0m'
+TXT_BLD='\033[1m'
+
+# --- UI Elements ---
+show_header() {
+    clear
+    echo -e "${COL_CYN}"
+    cat << 'EOF'
+  ===========================================
+    Android-to-Linux Setup Utility for Termux
+  ===========================================
+EOF
+    echo -e "${NO_COL}\n"
 }
 
-spinner() {
-    local pid=$1
-    local message=$2
-    local spin='-\|/'
-    local i=0
+render_bar() {
+    ((CURRENT_PHASE++))
+    local pct=$((CURRENT_PHASE * 100 / MAX_PHASES))
+    local active=$((pct / 5))
+    local inactive=$((20 - active))
+    local pbar="${COL_GRN}"
+    for ((i=0; i<active; i++)); do pbar+="█"; done
+    pbar="${pbar}${COL_GRY}"
+    for ((i=0; i<inactive; i++)); do pbar+="░"; done
+    pbar="${pbar}${NO_COL}"
+    echo -e "\n${COL_BLU}---> Phase ${CURRENT_PHASE}/${MAX_PHASES} | ${pbar} ${COL_WHT}${pct}%${NO_COL}\n"
+}
+
+async_loader() {
+    local bg_task=$1
+    local label=$2
+    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    local idx=0
     
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) % 4 ))
-        printf "\r  [*] ${message} ${CYAN}${spin:$i:1}${NC}  "
+    while kill -0 $bg_task 2>/dev/null; do
+        printf "\r ${COL_CYN}${frames[$idx]}${NO_COL} %s..." "$label"
+        idx=$(( (idx+1) % 10 ))
         sleep 0.1
     done
-    
-    wait $pid
-    local exit_code=$?
-    
-    if [ $exit_code -eq 0 ]; then
-        printf "\r  [+] ${message}                    \n"
+    wait $bg_task
+    local outcome=$?
+    if [ $outcome -eq 0 ]; then
+        printf "\r ${COL_GRN}✔${NO_COL} %s               \n" "$label"
     else
-        printf "\r  [-] ${message} ${RED}(failed)${NC}     \n"
+        printf "\r ${COL_RED}✘${NO_COL} %s (Failed)      \n" "$label"
     fi
-    
-    return $exit_code
+    return $outcome
 }
 
-install_pkg() {
-    local pkg=$1
-    local name=${2:-$pkg}
-    (DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" $pkg > /dev/null 2>&1) &
-    spinner $! "Installing ${name}..."
+grab_pkg() {
+    local target_pkg=$1
+    local display_val=${2:-$target_pkg}
+    (DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" "$target_pkg" > /dev/null 2>&1) &
+    async_loader $! "Procuring $display_val"
 }
 
-# ============== BANNER ==============
-show_banner() {
-    clear
-    echo -e "${CYAN}"
-    cat << 'BANNER'
-    -------------------------------------------
-                                               
-            Termux Linux Setup Script          
-                                               
-    -------------------------------------------
-BANNER
-    echo -e "${NC}"
-    echo ""
-}
-
-# ============== DEVICE & USER SELECTION ==============
-setup_environment() {
-    echo -e "${PURPLE}[*] Detecting your device...${NC}"
-    echo ""
+# --- Initialization Phase ---
+init_env() {
+    echo -e "${COL_MAG}[*] Analyzing hardware specs...${NO_COL}\n"
+    echo -e "  - Hardware: ${COL_WHT}${DEV_BRAND} ${DEV_MODEL}${NO_COL}"
+    echo -e "  - OS Version: ${COL_WHT}${SYS_VERSION}${NO_COL}"
     
-    DEVICE_MODEL=$(getprop ro.product.model 2>/dev/null || echo "Unknown")
-    DEVICE_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "Unknown")
-    ANDROID_VERSION=$(getprop ro.build.version.release 2>/dev/null || echo "Unknown")
-    CPU_ABI=$(getprop ro.product.cpu.abi 2>/dev/null || echo "arm64-v8a")
-    GPU_VENDOR=$(getprop ro.hardware.egl 2>/dev/null || echo "")
-    
-    echo -e "  [*] Device: ${WHITE}${DEVICE_BRAND} ${DEVICE_MODEL}${NC}"
-    echo -e "  [*] Android: ${WHITE}${ANDROID_VERSION}${NC}"
-    
-    if [[ "$GPU_VENDOR" == *"adreno"* ]] || [[ "$DEVICE_BRAND" == *"samsung"* ]] || [[ "$DEVICE_BRAND" == *"Samsung"* ]] || [[ "$DEVICE_BRAND" == *"oneplus"* ]] || [[ "$DEVICE_BRAND" == *"xiaomi"* ]]; then
-        GPU_DRIVER="freedreno"
-        echo -e "  [*] GPU: ${WHITE}Adreno (Qualcomm) - Hardware Acceleration Supported${NC}"
+    if [[ "${GPU_EGL,,}" == *"adreno"* ]] || [[ "${DEV_BRAND,,}" == *"samsung"* ]] || [[ "${DEV_BRAND,,}" == *"oneplus"* ]] || [[ "${DEV_BRAND,,}" == *"xiaomi"* ]]; then
+        GRAPHICS_MODE="freedreno"
+        echo -e "  - GPU Accelerator: ${COL_WHT}Mesa Turnip / Adreno Supported${NO_COL}"
     else
-        GPU_DRIVER="zink_native"
-        echo -e "  [*] GPU: ${WHITE}Non-Adreno - Zink Native Vulkan${NC}"
-        echo -e "${YELLOW}      [!] WARNING: Your device may not fully support advanced GPU acceleration.${NC}"
-        echo -e "${YELLOW}      [!] We HIGHLY RECOMMEND choosing LXQt or XFCE for smooth performance.${NC}"
+        GRAPHICS_MODE="zink_native"
+        echo -e "  - GPU Accelerator: ${COL_WHT}Zink Native Override${NO_COL}"
+        echo -e "${COL_YLW}    [!] Note: Limited hardware acceleration due to non-Adreno chip.${NO_COL}"
     fi
     echo ""
     
-    echo -e "${CYAN}Please choose your Desktop Environment:${NC}"
-    echo -e "  ${WHITE}1) XFCE4${NC}       (Recommended - Fast, Customizable, macOS style dock)"
-    echo -e "  ${WHITE}2) LXQt${NC}        (Ultra lightweight - Best for low end devices)"
-    echo -e "  ${WHITE}3) MATE${NC}        (Classic UI, moderately heavy)"
-    echo -e "  ${WHITE}4) KDE Plasma${NC}  (Very heavy - Modern, Windows 11 style, requires strong GPU/RAM)"
+    echo -e "${COL_CYN}Pick a graphic environment layer:${NO_COL}"
+    echo -e "  ${COL_WHT}1) XFCE4${NO_COL} (Balanced, Mac-like, High stability)"
+    echo -e "  ${COL_WHT}2) LXQt${NO_COL}  (Minimalist, optimized for old hardware)"
+    echo -e "  ${COL_WHT}3) MATE${NO_COL}  (Standard traditional desktop)"
+    echo -e "  ${COL_WHT}4) KDE Plasma${NO_COL} (Aesthetically focused, high resource usage)"
     echo ""
     while true; do
-        read -p "Enter number (1-4) [default: 1]: " DE_INPUT
-        DE_INPUT=${DE_INPUT:-1}
-        if [[ "$DE_INPUT" =~ ^[1-4]$ ]]; then
-            DE_CHOICE="$DE_INPUT"
+        read -p "Select [1-4] (default: 1): " INPUT_SEL
+        INPUT_SEL=${INPUT_SEL:-1}
+        if [[ "$INPUT_SEL" =~ ^[1-4]$ ]]; then
+            CHOSEN_INTERFACE="$INPUT_SEL"
             break
         else
-            echo "Invalid input. Please enter 1, 2, 3, or 4."
+            echo "Bad selection."
         fi
     done
     
-    case $DE_CHOICE in
-        1) DE_NAME="XFCE4"; START_CMD="startxfce4"; SESSION_PROC="xfce4-session"; PANEL_PROC="plank" ;;
-        2) DE_NAME="LXQt"; START_CMD="startlxqt"; SESSION_PROC="lxqt-session"; PANEL_PROC="" ;;
-        3) DE_NAME="MATE"; START_CMD="mate-session"; SESSION_PROC="mate-session"; PANEL_PROC="plank" ;;
-        4) DE_NAME="KDE Plasma"; START_CMD="startplasma-x11"; SESSION_PROC="startplasma-x11"; PANEL_PROC="kwin_x11" ;;
+    case $CHOSEN_INTERFACE in
+        1) UI_IDENTIFIER="XFCE4"; STARTUP_APP="startxfce4"; SESSION_LEADER="xfce4-session"; DOCK_COMPONENT="plank" ;;
+        2) UI_IDENTIFIER="LXQt"; STARTUP_APP="startlxqt"; SESSION_LEADER="lxqt-session"; DOCK_COMPONENT="" ;;
+        3) UI_IDENTIFIER="MATE"; STARTUP_APP="mate-session"; SESSION_LEADER="mate-session"; DOCK_COMPONENT="plank" ;;
+        4) UI_IDENTIFIER="KDE Plasma"; STARTUP_APP="startplasma-x11"; SESSION_LEADER="startplasma-x11"; DOCK_COMPONENT="kwin_x11" ;;
     esac
     
-    # Save the config for RDP scripts
+    # Store settings for VNC/RDP helper scripts
     mkdir -p ~/.config
-    cat > ~/.config/termux-linux.conf << EOF
-DE_NAME="${DE_NAME}"
-START_CMD="${START_CMD}"
-SESSION_PROC="${SESSION_PROC}"
-PANEL_PROC="${PANEL_PROC}"
-DE_INPUT="${DE_CHOICE}"
-EOF
+    cat > ~/.config/termux-linux.conf << CONF_EOF
+DE_NAME="${UI_IDENTIFIER}"
+START_CMD="${STARTUP_APP}"
+SESSION_PROC="${SESSION_LEADER}"
+PANEL_PROC="${DOCK_COMPONENT}"
+DE_INPUT="${CHOSEN_INTERFACE}"
+CONF_EOF
 
-    echo -e "\n${GREEN}[+] Selected: ${DE_NAME}.${NC}"
+    echo -e "\n${COL_GRN}[+] Environment set to: ${UI_IDENTIFIER}.${NO_COL}"
     sleep 2
 }
 
-# ============== STEP 1: UPDATE SYSTEM ==============
-step_update() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Updating system packages...${NC}"
-    echo ""
+# --- Module Executors ---
+module_base_sync() {
+    render_bar
+    echo -e "${COL_MAG}Synchronizing package indices...${NO_COL}\n"
     (DEBIAN_FRONTEND=noninteractive apt-get update -y > /dev/null 2>&1) &
-    spinner $! "Updating package lists..."
+    async_loader $! "Syncing apt cache"
     (DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q -o Dpkg::Options::="--force-confold" > /dev/null 2>&1) &
-    spinner $! "Upgrading installed packages..."
+    async_loader $! "Patching out-of-date bins"
 }
 
-# ============== STEP 2: INSTALL REPOSITORIES ==============
-step_repos() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Adding package repositories...${NC}"
-    echo ""
-    install_pkg "x11-repo" "X11 Repository"
-    install_pkg "tur-repo" "TUR Repository (Firefox)"
+module_external_repos() {
+    render_bar
+    echo -e "${COL_MAG}Binding custom APT repos...${NO_COL}\n"
+    grab_pkg "x11-repo" "Termux X11 Core"
+    grab_pkg "tur-repo" "Termux User Repo"
 }
 
-# ============== STEP 3: INSTALL TERMUX-X11 ==============
-step_x11() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing Termux-X11...${NC}"
-    echo ""
-    install_pkg "termux-x11-nightly" "Termux-X11 Display Server"
-    install_pkg "xorg-xrandr" "XRandR (Display Settings)"
-    install_pkg "tigervnc" "TigerVNC"
-    install_pkg "xrdp" "xRDP Server"
-    install_pkg "dbus" "D-Bus"
-    install_pkg "nodejs" "NodeJS"
+module_xorg_server() {
+    render_bar
+    echo -e "${COL_MAG}Setting up display pipeline...${NO_COL}\n"
+    grab_pkg "termux-x11-nightly" "X11 Display Interface"
+    grab_pkg "xorg-xrandr" "Resolution Controller"
+    grab_pkg "tigervnc" "VNC Server Integration"
+    grab_pkg "xrdp" "Microsoft RDP Backend"
+    grab_pkg "dbus" "D-Bus Daemon"
+    grab_pkg "nodejs" "Node Runtime"
 }
 
-# ============== STEP 4: INSTALL DESKTOP ==============
-step_desktop() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing ${DE_NAME} Desktop...${NC}"
-    echo ""
+module_gui_layer() {
+    render_bar
+    echo -e "${COL_MAG}Deploying ${UI_IDENTIFIER} assets...${NO_COL}\n"
     
-    if [ "$DE_CHOICE" == "1" ]; then
-        # XFCE
-        install_pkg "xfce4" "XFCE4 Desktop"
-        install_pkg "xfce4-terminal" "XFCE4 Terminal"
-        install_pkg "xfce4-whiskermenu-plugin" "Whisker Menu"
-        install_pkg "plank-reloaded" "Plank Dock"
-        install_pkg "thunar" "Thunar File Manager"
-        install_pkg "mousepad" "Mousepad Editor"
-    elif [ "$DE_CHOICE" == "2" ]; then
-        # LXQt
-        install_pkg "lxqt" "LXQt Desktop"
-        install_pkg "qterminal" "QTerminal"
-        install_pkg "pcmanfm-qt" "PCManFM-Qt"
-        install_pkg "featherpad" "FeatherPad"
-    elif [ "$DE_CHOICE" == "3" ]; then
-        # MATE
-        install_pkg "mate" "MATE Desktop"
-        install_pkg "mate-tweak" "MATE Tweak"
-        install_pkg "plank-reloaded" "Plank Dock"
-        install_pkg "mate-terminal" "MATE Terminal"
-    elif [ "$DE_CHOICE" == "4" ]; then
-        # KDE
-        install_pkg "plasma-desktop" "KDE Plasma"
-        install_pkg "konsole" "Konsole"
-        install_pkg "dolphin" "Dolphin"
+    if [ "$CHOSEN_INTERFACE" == "1" ]; then
+        grab_pkg "xfce4" "XFCE Base System"
+        grab_pkg "xfce4-terminal" "Terminal Emulator"
+        grab_pkg "xfce4-whiskermenu-plugin" "App Launcher Menu"
+        grab_pkg "plank-reloaded" "Dock Extension"
+        grab_pkg "thunar" "File Navigator"
+        grab_pkg "mousepad" "Text Editor"
+    elif [ "$CHOSEN_INTERFACE" == "2" ]; then
+        grab_pkg "lxqt" "LXQt Core"
+        grab_pkg "qterminal" "QTerminal App"
+        grab_pkg "pcmanfm-qt" "PCMan File Manager"
+        grab_pkg "featherpad" "Lightweight Editor"
+    elif [ "$CHOSEN_INTERFACE" == "3" ]; then
+        grab_pkg "mate" "MATE Framework"
+        grab_pkg "mate-tweak" "MATE Customizer"
+        grab_pkg "plank-reloaded" "Dock App"
+        grab_pkg "mate-terminal" "MATE Prompt"
+    elif [ "$CHOSEN_INTERFACE" == "4" ]; then
+        grab_pkg "plasma-desktop" "KDE Plasma Workspaces"
+        grab_pkg "konsole" "Konsole Tracker"
+        grab_pkg "dolphin" "Dolphin FM"
     fi
 }
 
-# ============== STEP 5: INSTALL GPU DRIVERS ==============
-step_gpu() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing GPU Acceleration...${NC}"
-    echo ""
-    install_pkg "mesa-zink" "Mesa Zink Core"
-    if [ "$GPU_DRIVER" == "freedreno" ]; then
-        install_pkg "mesa-vulkan-icd-freedreno" "Turnip Adreno Driver"
+module_gfx_drivers() {
+    render_bar
+    echo -e "${COL_MAG}Binding hardware GPU APIs...${NO_COL}\n"
+    grab_pkg "mesa-zink" "Zink Vulkan Layer"
+    if [ "$GRAPHICS_MODE" == "freedreno" ]; then
+        grab_pkg "mesa-vulkan-icd-freedreno" "Turnip Mesa Wrapper"
     fi
-    install_pkg "vulkan-loader-android" "Vulkan Loader"
+    grab_pkg "vulkan-loader-android" "Native Android Vulkan"
 }
 
-# ============== STEP 6: INSTALL AUDIO ==============
-step_audio() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing Audio...${NC}"
-    echo ""
-    install_pkg "pulseaudio" "PulseAudio Server"
+module_audio_subsys() {
+    render_bar
+    echo -e "${COL_MAG}Applying audio patches...${NO_COL}\n"
+    grab_pkg "pulseaudio" "PA Network Daemon"
 }
 
-# ============== STEP 7: INSTALL APPS (VS Code, VLC, etc.) ==============
-step_apps() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing Media & Dev Apps...${NC}"
-    echo ""
-    install_pkg "firefox" "Firefox Browser"
-    install_pkg "vlc" "VLC Media Player"
-    install_pkg "git" "Git Version Control"
-    install_pkg "wget" "Wget Downloader"
-    install_pkg "curl" "cURL"
+module_extra_utilities() {
+    render_bar
+    echo -e "${COL_MAG}Injecting productivity suite...${NO_COL}\n"
+    grab_pkg "firefox" "Mozilla Web Browser"
+    grab_pkg "vlc" "VLC Video Framework"
+    grab_pkg "git" "Git SCM Hub"
+    grab_pkg "wget" "Wget Web Fetcher"
+    grab_pkg "curl" "Curl Network Requestor"
 }
 
-# ============== STEP 8: PYTHON & FLASK DEMO ==============
-step_python() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing Python Environment...${NC}"
-    echo ""
-    install_pkg "python" "Python 3"
+module_python_demo() {
+    render_bar
+    echo -e "${COL_MAG}Configuring scripting environment...${NO_COL}\n"
+    grab_pkg "python" "Python Interpreter"
     
     (pip install flask > /dev/null 2>&1) &
-    spinner $! "Installing Flask Web Framework..."
+    async_loader $! "Building Flask bindings"
     
-    # Create Python Demo
-    mkdir -p ~/demo_python
-    cat > ~/demo_python/app.py << 'EOF'
+    mkdir -p "$HOME/demo_python"
+    cat > "$HOME/demo_python/app.py" << 'PY_EOF'
 from flask import Flask, render_template_string
 app = Flask(__name__)
 
@@ -280,54 +235,47 @@ app = Flask(__name__)
 def hello():
     return render_template_string("""
     <html>
-        <body style="background-color:#1e1e1e;color:#00ff00;font-family:monospace;text-align:center;padding:50px">
-            <h1>Hardware Accelerated Linux</h1>
-            <h3>This Python server is running natively on a Snapdragon Android phone!</h3>
+        <body style="background-color:#0d1117;color:#58a6ff;font-family:monospace;text-align:center;padding:50px">
+            <h1>Termux Hosted Hardware Environment</h1>
+            <h3>This endpoint is successfully routing mapped via Python Flask!</h3>
         </body>
     </html>
     """)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-EOF
-    echo -e "  [+] Python Web Demo created in ~/demo_python"
+PY_EOF
+    echo -e "  [+] Sample Python demo compiled at ~/demo_python/app.py"
 }
 
-# ============== STEP 9: INSTALL WINE ==============
-step_wine() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing Windows Support (Wine/Box64)...${NC}"
-    echo ""
+module_wine_wrapper() {
+    render_bar
+    echo -e "${COL_MAG}Provisioning Windows translation layers...${NO_COL}\n"
     (pkg remove wine-stable -y > /dev/null 2>&1) &
-    spinner $! "Removing old Wine versions..."
+    async_loader $! "Purging deprecated Wine instances"
     
-    install_pkg "hangover-wine" "Wine Compatibility Layer"
-    install_pkg "hangover-wowbox64" "Box64 Wrapper"
+    grab_pkg "hangover-wine" "Hangover x86 Engine"
+    grab_pkg "hangover-wowbox64" "x64 Emulator Box"
     
     ln -sf /data/data/com.termux/files/usr/opt/hangover-wine/bin/wine /data/data/com.termux/files/usr/bin/wine
     ln -sf /data/data/com.termux/files/usr/opt/hangover-wine/bin/winecfg /data/data/com.termux/files/usr/bin/winecfg
 }
 
-# ============== STEP 10: CREATE LAUNCHERS ==============
-step_launchers() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Configuring Startup Scripts...${NC}"
-    echo ""
+module_system_scripts() {
+    render_bar
+    echo -e "${COL_MAG}Fleshing out bash control scrips...${NO_COL}\n"
     
     mkdir -p ~/.config
     
-    # Base XDG variables for Termux Paths
-    XDG_INJECT="export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:\${XDG_DATA_DIRS}\nexport XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:\${XDG_CONFIG_DIRS}"
+    local XDG_PATHS="export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:\${XDG_DATA_DIRS}\nexport XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:\${XDG_CONFIG_DIRS}"
 
-    # KDE needs a special env injection
-    if [ "$DE_CHOICE" == "4" ]; then
+    if [ "$CHOSEN_INTERFACE" == "4" ]; then
         mkdir -p ~/.config/plasma-workspace/env
-        echo -e "#!/data/data/com.termux/files/usr/bin/bash\n$XDG_INJECT" > ~/.config/plasma-workspace/env/xdg_fix.sh
-        chmod +x ~/.config/plasma-workspace/env/xdg_fix.sh
+        echo -e "#!/data/data/com.termux/files/usr/bin/bash\n$XDG_PATHS" > ~/.config/plasma-workspace/env/xdg_override.sh
+        chmod +x ~/.config/plasma-workspace/env/xdg_override.sh
     fi
     
-    # GPU & Environment Config
-    cat > ~/.config/linux-gpu.sh << EOF
+    cat > ~/.config/gpu-profile.sh << GPU_EOF
 export MESA_NO_ERROR=1
 export MESA_GL_VERSION_OVERRIDE=4.6
 export MESA_GLES_VERSION_OVERRIDE=3.2
@@ -336,18 +284,18 @@ export MESA_LOADER_DRIVER_OVERRIDE=zink
 export TU_DEBUG=noconform
 export MESA_VK_WSI_PRESENT_MODE=immediate
 export ZINK_DESCRIPTORS=lazy
-EOF
+GPU_EOF
 
-    if [ "$DE_CHOICE" == "4" ]; then
-        echo "export KWIN_COMPOSE=O2ES" >> ~/.config/linux-gpu.sh
+    if [ "$CHOSEN_INTERFACE" == "4" ]; then
+        echo "export KWIN_COMPOSE=O2ES" >> ~/.config/gpu-profile.sh
     else
-        echo -e "$XDG_INJECT" >> ~/.config/linux-gpu.sh
+        echo -e "$XDG_PATHS" >> ~/.config/gpu-profile.sh
     fi
     
-    # Create Plank autostart if XFCE or MATE
-    if [ "$DE_CHOICE" == "1" ] || [ "$DE_CHOICE" == "3" ]; then
+    # Plank integration
+    if [[ "$CHOSEN_INTERFACE" == "1" || "$CHOSEN_INTERFACE" == "3" ]]; then
         mkdir -p ~/.config/autostart
-        cat > ~/.config/autostart/plank.desktop << 'PLANKEOF'
+        cat > ~/.config/autostart/plank.desktop << 'PLANK_EXT'
 [Desktop Entry]
 Type=Application
 Exec=plank
@@ -355,178 +303,150 @@ Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
 Name=Plank
-PLANKEOF
+PLANK_EXT
     else
         rm -f ~/.config/autostart/plank.desktop 2>/dev/null
     fi
 
-    # Determine execution commands and kill commands based on DE
-    case $DE_CHOICE in
-        1)
-            EXEC_CMD="exec startxfce4"
-            KILL_CMD="pkill -9 xfce4-session; pkill -9 plank"
-            ;;
-        2)
-            EXEC_CMD="exec startlxqt"
-            KILL_CMD="pkill -9 lxqt-session"
-            ;;
-        3)
-            EXEC_CMD="exec mate-session"
-            KILL_CMD="pkill -9 mate-session; pkill -9 plank"
-            ;;
-        4)
-            EXEC_CMD="(sleep 5 && pkill -9 plasmashell && plasmashell) > /dev/null 2>&1 &\nexec startplasma-x11"
-            KILL_CMD="pkill -9 startplasma-x11; pkill -9 kwin_x11"
-            ;;
-    esac
+    # Build terminator commands
+    local TERM_CMD=""
+    if [ "$CHOSEN_INTERFACE" == "1" ]; then TERM_CMD="pkill -9 xfce4-session; pkill -9 plank"; fi
+    if [ "$CHOSEN_INTERFACE" == "2" ]; then TERM_CMD="pkill -9 lxqt-session"; fi
+    if [ "$CHOSEN_INTERFACE" == "3" ]; then TERM_CMD="pkill -9 mate-session; pkill -9 plank"; fi
+    if [ "$CHOSEN_INTERFACE" == "4" ]; then
+        STARTUP_APP="(sleep 5 && pkill -9 plasmashell && plasmashell) > /dev/null 2>&1 &\nexec startplasma-x11"
+        TERM_CMD="pkill -9 startplasma-x11; pkill -9 kwin_x11"
+    else
+        STARTUP_APP="exec ${STARTUP_APP}"
+    fi
 
-    # Main Launcher
-    cat > ~/start-linux.sh << LAUNCHEREOF
+    cat > ~/start-linux.sh << SH_START
 #!/data/data/com.termux/files/usr/bin/bash
 echo ""
-echo "[*] Starting ${DE_NAME}..."
+echo "[*] Initializing ${UI_IDENTIFIER} workspace..."
 echo ""
-source ~/.config/linux-gpu.sh 2>/dev/null
+source ~/.config/gpu-profile.sh 2>/dev/null
 
-echo "[*] Cleaning up old sessions..."
+echo "[*] Terminating ghost processes..."
 pkill -9 -f "termux.x11" 2>/dev/null
-${KILL_CMD} 2>/dev/null
+${TERM_CMD} 2>/dev/null
 pkill -9 -f "dbus" 2>/dev/null
 
 unset PULSE_SERVER
 pulseaudio --kill 2>/dev/null
 sleep 0.5
-echo "[*] Starting audio server..."
+echo "[*] Booting PA subsystem..."
 pulseaudio --start --exit-idle-time=-1
 sleep 1
 pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null
 export PULSE_SERVER=127.0.0.1
 
-echo "[*] Starting X11 server..."
+echo "[*] Launching Wayland/X11 surface..."
 termux-x11 :0 -ac &
 sleep 3
 export DISPLAY=:0
 
-echo "-----------------------------------------------"
-echo "  [*] Open Termux-X11 app to view desktop!"
-echo "-----------------------------------------------"
-echo ""
-${EXEC_CMD}
-LAUNCHEREOF
-    chmod +x ~/start-linux.sh
-    echo -e "  [+] Created ~/start-linux.sh"
-    
-    # Stopper
-    cat > ~/stop-linux.sh << STOPEOF
+echo -e "\n  [>] Open the Termux-X11 android app now to view the stream!\n"
+${STARTUP_APP}
+SH_START
+
+    cat > ~/stop-linux.sh << SH_KILL
 #!/data/data/com.termux/files/usr/bin/bash
-echo "Stopping ${DE_NAME}..."
+echo "Halting ${UI_IDENTIFIER} workspace..."
 pkill -9 -f "termux.x11" 2>/dev/null
 pkill -9 -f "pulseaudio" 2>/dev/null
-${KILL_CMD} 2>/dev/null
+${TERM_CMD} 2>/dev/null
 pkill -9 -f "dbus" 2>/dev/null
-echo "Desktop stopped."
-STOPEOF
-    chmod +x ~/stop-linux.sh
-    echo -e "  [+] Created ~/stop-linux.sh"
+echo "Session cleanly unmounted."
+SH_KILL
+
+    chmod +x ~/start-linux.sh ~/stop-linux.sh
+    echo -e "  [+] Hooks generated at ~/start-linux.sh & ~/stop-linux.sh"
 }
 
-# ============== STEP 11: CREATE SHORTCUTS ==============
-step_shortcuts() {
-    update_progress
-    echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Creating Desktop Shortcuts...${NC}"
-    echo ""
+module_desktop_links() {
+    render_bar
+    echo -e "${COL_MAG}Plotting icon grid layout...${NO_COL}\n"
     mkdir -p ~/Desktop
     
-    # App shortcuts
-    cat > ~/Desktop/Firefox.desktop << 'EOF'
+    cat > ~/Desktop/Firefox.desktop << 'EXT'
 [Desktop Entry]
 Name=Firefox
 Exec=firefox
 Icon=firefox
 Type=Application
-EOF
+EXT
 
-
-
-    cat > ~/Desktop/VLC.desktop << 'EOF'
+    cat > ~/Desktop/VLC.desktop << 'EXT'
 [Desktop Entry]
 Name=VLC Media Player
 Exec=vlc
 Icon=vlc
 Type=Application
-EOF
+EXT
 
-    cat > ~/Desktop/Wine_Config.desktop << 'EOF'
+    cat > ~/Desktop/Wine_Config.desktop << 'EXT'
 [Desktop Entry]
-Name=Wine Config (Windows)
+Name=Wine Configuration
 Exec=wine winecfg
 Icon=wine
 Type=Application
-EOF
+EXT
 
-    # Dynamic terminal shortcut
-    local term_cmd="xfce4-terminal"
-    local term_icon="utilities-terminal"
-    if [ "$DE_CHOICE" == "2" ]; then term_cmd="qterminal"; fi
-    if [ "$DE_CHOICE" == "3" ]; then term_cmd="mate-terminal"; fi
-    if [ "$DE_CHOICE" == "4" ]; then term_cmd="konsole"; fi
+    local default_term="xfce4-terminal"
+    local default_icon="utilities-terminal"
+    if [ "$CHOSEN_INTERFACE" == "2" ]; then default_term="qterminal"; fi
+    if [ "$CHOSEN_INTERFACE" == "3" ]; then default_term="mate-terminal"; fi
+    if [ "$CHOSEN_INTERFACE" == "4" ]; then default_term="konsole"; fi
     
-    cat > ~/Desktop/Terminal.desktop << EOF
+    cat > ~/Desktop/Terminal.desktop << EXT
 [Desktop Entry]
-Name=Terminal
-Exec=${term_cmd}
-Icon=${term_icon}
+Name=Root Terminal
+Exec=${default_term}
+Icon=${default_icon}
 Type=Application
-EOF
+EXT
 
     chmod +x ~/Desktop/*.desktop 2>/dev/null
-    echo -e "  [+] Added Firefox, VLC, Wine, and Terminal shortcuts."
 }
 
-# ============== COMPLETION ==============
-show_completion() {
+# --- Teardown & Exit ---
+print_footer() {
+    echo -e "\n${COL_GRN}"
+    cat << 'FOOT_EOF'
+   ========================================================
+     [✔] BASE INSTALLATION METRICS SATISFIED
+   ========================================================
+FOOT_EOF
+    echo -e "${NO_COL}"
+    echo -e "${COL_WHT}[*] Your custom ${UI_IDENTIFIER} profile is standing by.${NO_COL}"
+    echo -e "    - Prebuilt Web Framework included at ~/demo_python"
+    echo -e "    - VNC & X11 Server binaries present"
+    echo -e "    - Hardware 3D Acceleration flags built into ~/start-linux.sh"
     echo ""
-    echo -e "${GREEN}"
-    cat << 'COMPLETE'
-    ---------------------------------------------------------------
-             [*]  INSTALLATION COMPLETE!  [*]                      
-    ---------------------------------------------------------------
-COMPLETE
-    echo -e "${NC}"
-    
-    echo -e "${WHITE}[*] Your ${DE_NAME} environment is ready.${NC}"
-    echo -e "${CYAN}[*] Installed Software:${NC}"
-    echo "    - Python (Flask Demo located in ~/demo_python)"
-    echo "    - Firefox Browser & VLC Media Player"
-    echo "    - Wine & Hangover (Windows PC App compatibility)"
-    echo "    - GPU Hardware Acceleration Enabled"
-    echo ""
-    echo -e "${YELLOW}------------------------------------------------------------${NC}"
-    echo -e "${WHITE}[*] TO CONFIGURE RDP/VNC:${NC}   ${GREEN}./setup.sh${NC}"
-    echo -e "${WHITE}[*] TO START THE DESKTOP:${NC}  ${GREEN}~/start-linux.sh${NC} (or ./start.sh)"
-    echo -e "${WHITE}[*] TO STOP THE DESKTOP:${NC}   ${GREEN}~/stop-linux.sh${NC} (or ./stop.sh)"
-    echo -e "${YELLOW}------------------------------------------------------------${NC}"
-    echo ""
+    echo -e "${COL_YLW}------------------------------------------------------------${NO_COL}"
+    echo -e "${COL_WHT}* TO BIND RDP & VNC HOOKS:${NO_COL} ${COL_CYN}./setup.sh${NO_COL}"
+    echo -e "${COL_WHT}* NATIVE LOCAL EXECUTION:${NO_COL}  ${COL_CYN}~/start-linux.sh${NO_COL} (or ./start.sh)"
+    echo -e "${COL_WHT}* HARD KILL ALL PROCS:${NO_COL}     ${COL_CYN}~/stop-linux.sh${NO_COL} (or ./stop.sh)"
+    echo -e "${COL_YLW}------------------------------------------------------------${NO_COL}\n"
 }
 
-# ============== MAIN ==============
-main() {
-    show_banner
-    setup_environment
-    
-    step_update
-    step_repos
-    step_x11
-    step_desktop
-    step_gpu
-    step_audio
-    step_apps
-    step_python
-    step_wine
-    step_launchers
-    step_shortcuts
-    
-    show_completion
+# --- System Exec ---
+execute_pipeline() {
+    show_header
+    init_env
+    module_base_sync
+    module_external_repos
+    module_xorg_server
+    module_gui_layer
+    module_gfx_drivers
+    module_audio_subsys
+    module_extra_utilities
+    module_python_demo
+    module_wine_wrapper
+    module_system_scripts
+    module_desktop_links
+    print_footer
 }
 
-main
+execute_pipeline
